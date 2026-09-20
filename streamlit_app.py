@@ -1,31 +1,31 @@
 # ============================================================
 # PROYECTO FINAL
-# ONLINE SHOPPERS PURCHASING INTENTION
+# ANÁLISIS DEL COMPORTAMIENTO DE LOS USUARIOS EN E-COMMERCE
 # ============================================================
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.express as px
+import io
 import urllib.request
 import zipfile
-import io
 
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+
 from sklearn.ensemble import RandomForestClassifier
-
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
+    confusion_matrix,
+    f1_score,
     precision_score,
     recall_score,
-    f1_score,
-    confusion_matrix
 )
+from sklearn.model_selection import train_test_split
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
 
 
 # ============================================================
@@ -36,39 +36,36 @@ st.set_page_config(
     page_title="Online Shoppers | Proyecto Final",
     page_icon="🛒",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
-
 
 st.markdown(
     """
     <style>
-
     .block-container {
-        padding-top: 2rem;
+        padding-top: 1.8rem;
         padding-bottom: 3rem;
         max-width: 1450px;
     }
 
     [data-testid="stMetric"] {
-        background-color: rgba(120,120,120,0.08);
-        border: 1px solid rgba(120,120,120,0.18);
-        padding: 16px;
+        background-color: rgba(120,120,120,0.07);
+        border: 1px solid rgba(120,120,120,0.16);
+        padding: 14px;
         border-radius: 14px;
     }
 
     [data-testid="stMetricValue"] {
-        font-size: 27px;
+        font-size: 26px;
     }
-
     </style>
     """,
-    unsafe_allow_html=True
+    unsafe_allow_html=True,
 )
 
 
 # ============================================================
-# DATASET
+# CARGA Y LIMPIEZA DEL DATASET
 # ============================================================
 
 DATA_URL = (
@@ -79,40 +76,23 @@ DATA_URL = (
 
 @st.cache_data
 def cargar_datos():
-
     with urllib.request.urlopen(DATA_URL) as response:
         contenido = response.read()
 
-    with zipfile.ZipFile(
-        io.BytesIO(contenido)
-    ) as archivo_zip:
-
-        archivos_csv = [
+    with zipfile.ZipFile(io.BytesIO(contenido)) as archivo_zip:
+        csvs = [
             nombre
             for nombre in archivo_zip.namelist()
             if nombre.lower().endswith(".csv")
         ]
 
-        if not archivos_csv:
-            raise FileNotFoundError(
-                "No se encontró un archivo CSV."
-            )
+        if not csvs:
+            raise FileNotFoundError("No se encontró el CSV dentro del ZIP.")
 
-        with archivo_zip.open(
-            archivos_csv[0]
-        ) as archivo:
+        with archivo_zip.open(csvs[0]) as archivo:
+            df_original = pd.read_csv(archivo)
 
-            df_original = pd.read_csv(
-                archivo
-            )
-
-    # --------------------------------------------------------
-    # LIMPIEZA
-    # --------------------------------------------------------
-
-    duplicados = int(
-        df_original.duplicated().sum()
-    )
+    duplicados = int(df_original.duplicated().sum())
 
     df_limpio = (
         df_original
@@ -120,29 +100,14 @@ def cargar_datos():
         .reset_index(drop=True)
     )
 
-    return (
-        df_original,
-        df_limpio,
-        duplicados
-    )
+    return df_original, df_limpio, duplicados
 
 
 try:
-
-    (
-        df_original,
-        df,
-        duplicados
-    ) = cargar_datos()
-
+    df_original, df, duplicados = cargar_datos()
 except Exception as error:
-
-    st.error(
-        "No fue posible cargar el dataset."
-    )
-
+    st.error("No fue posible cargar el dataset desde UCI.")
     st.write(error)
-
     st.stop()
 
 
@@ -150,7 +115,7 @@ except Exception as error:
 # VARIABLES
 # ============================================================
 
-variables_numericas = [
+variables_numericas_eda = [
     "Administrative",
     "Administrative_Duration",
     "Informational",
@@ -160,22 +125,26 @@ variables_numericas = [
     "BounceRates",
     "ExitRates",
     "PageValues",
-    "SpecialDay"
+    "SpecialDay",
 ]
 
+# En el Colab se eliminan ProductRelated y Administrative
+# después de la matriz de correlación, y PageValues antes del modelo.
+variables_eliminadas_modelo = [
+    "ProductRelated",
+    "Administrative",
+    "PageValues",
+]
 
 variables_numericas_modelo = [
-    "Administrative",
     "Administrative_Duration",
     "Informational",
     "Informational_Duration",
-    "ProductRelated",
     "ProductRelated_Duration",
     "BounceRates",
     "ExitRates",
-    "SpecialDay"
+    "SpecialDay",
 ]
-
 
 variables_categoricas = [
     "Month",
@@ -184,9 +153,8 @@ variables_categoricas = [
     "Region",
     "TrafficType",
     "VisitorType",
-    "Weekend"
+    "Weekend",
 ]
-
 
 orden_meses = [
     "Feb",
@@ -198,70 +166,53 @@ orden_meses = [
     "Sep",
     "Oct",
     "Nov",
-    "Dec"
+    "Dec",
+]
+
+variables_mayo_noviembre = [
+    "ProductRelated_Duration",
+    "BounceRates",
+    "ExitRates",
+    "Administrative_Duration",
+    "Informational",
+    "Informational_Duration",
+    "PageValues",
 ]
 
 
 # ============================================================
-# FUNCIONES
+# FUNCIONES AUXILIARES
 # ============================================================
 
 def tasa_conversion(data):
-
     if len(data) == 0:
         return 0.0
 
     return float(
-        data["Revenue"].mean()
-        * 100
+        data["Revenue"].mean() * 100
     )
 
 
-def agregar_resultado(data):
-
+def con_resultado(data):
     temp = data.copy()
 
-    temp["Resultado"] = (
-        temp["Revenue"]
-        .map(
-            {
-                False: "No compra",
-                True: "Compra"
-            }
-        )
+    temp["Resultado"] = temp["Revenue"].map(
+        {
+            False: "No compra",
+            True: "Compra",
+        }
     )
 
     return temp
 
 
-def paso_slider(serie):
+def safe_percent_change(base, nuevo):
+    if base == 0:
+        return np.nan
 
-    rango = (
-        float(serie.max())
-        - float(serie.min())
-    )
-
-    if rango <= 1:
-
-        return 0.001
-
-    elif rango <= 10:
-
-        return 0.1
-
-    elif rango <= 100:
-
-        return 1.0
-
-    else:
-
-        return max(
-            1.0,
-            round(
-                rango / 500,
-                2
-            )
-        )
+    return (
+        (nuevo / base) - 1
+    ) * 100
 
 
 # ============================================================
@@ -271,30 +222,24 @@ def paso_slider(serie):
 @st.cache_resource
 def entrenar_modelos(data):
 
+    # Conservamos el dataset completo para EDA,
+    # pero replicamos las eliminaciones del Colab SOLO para ML.
+
     df_modelo = data.copy()
 
-    # --------------------------------------------------------
-    # PAGEVALUES FUERA DEL MODELO
-    # --------------------------------------------------------
-
     df_modelo.drop(
-        columns=["PageValues"],
-        inplace=True
+        columns=variables_eliminadas_modelo,
+        inplace=True,
     )
-
-    # --------------------------------------------------------
-    # X / Y
-    # --------------------------------------------------------
 
     X = df_modelo.drop(
         "Revenue",
-        axis=1
+        axis=1,
     )
 
-    y = (
-        df_modelo["Revenue"]
-        .astype(int)
-    )
+    y = df_modelo[
+        "Revenue"
+    ].astype(int)
 
     # --------------------------------------------------------
     # ONE HOT ENCODING
@@ -303,7 +248,7 @@ def entrenar_modelos(data):
     X = pd.get_dummies(
         X,
         columns=variables_categoricas,
-        dtype=int
+        dtype=int,
     )
 
     # --------------------------------------------------------
@@ -314,17 +259,17 @@ def entrenar_modelos(data):
         X_train,
         X_test,
         y_train,
-        y_test
+        y_test,
     ) = train_test_split(
         X,
         y,
         test_size=0.20,
         random_state=42,
-        stratify=y
+        stratify=y,
     )
 
     # --------------------------------------------------------
-    # STANDARD SCALER
+    # ESCALADO
     # --------------------------------------------------------
 
     scaler = StandardScaler()
@@ -354,7 +299,7 @@ def entrenar_modelos(data):
     )
 
     # --------------------------------------------------------
-    # MODELOS
+    # MODELOS DEL COLAB
     # --------------------------------------------------------
 
     modelos = {
@@ -362,27 +307,27 @@ def entrenar_modelos(data):
         "Regresión Logística":
             LogisticRegression(
                 solver="saga",
-                random_state=42
+                random_state=42,
             ),
 
         "Árbol de Decisión":
             DecisionTreeClassifier(
                 criterion="entropy",
                 max_depth=7,
-                random_state=42
+                random_state=42,
             ),
 
         "k-NN":
             KNeighborsClassifier(
                 n_neighbors=25,
-                metric="euclidean"
+                metric="euclidean",
             ),
 
         "SVM":
             SVC(
                 random_state=42,
                 kernel="poly",
-                C=0.1
+                C=0.1,
             ),
 
         "Random Forest":
@@ -390,23 +335,18 @@ def entrenar_modelos(data):
                 class_weight="balanced",
                 max_depth=5,
                 min_samples_leaf=5,
-                random_state=42
-            )
+                random_state=42,
+            ),
     }
 
     resultados = []
-
     matrices = {}
-
-    # --------------------------------------------------------
-    # ENTRENAMIENTO
-    # --------------------------------------------------------
 
     for nombre, modelo in modelos.items():
 
         modelo.fit(
             X_train_scaled,
-            y_train
+            y_train,
         )
 
         pred = modelo.predict(
@@ -421,7 +361,7 @@ def entrenar_modelos(data):
                 "Accuracy":
                     accuracy_score(
                         y_test,
-                        pred
+                        pred,
                     ),
 
                 "F1 Macro":
@@ -429,23 +369,7 @@ def entrenar_modelos(data):
                         y_test,
                         pred,
                         average="macro",
-                        zero_division=0
-                    ),
-
-                "Precision Compra":
-                    precision_score(
-                        y_test,
-                        pred,
-                        pos_label=1,
-                        zero_division=0
-                    ),
-
-                "Recall Compra":
-                    recall_score(
-                        y_test,
-                        pred,
-                        pos_label=1,
-                        zero_division=0
+                        zero_division=0,
                     ),
 
                 "Precision No compra":
@@ -453,7 +377,7 @@ def entrenar_modelos(data):
                         y_test,
                         pred,
                         pos_label=0,
-                        zero_division=0
+                        zero_division=0,
                     ),
 
                 "Recall No compra":
@@ -461,8 +385,24 @@ def entrenar_modelos(data):
                         y_test,
                         pred,
                         pos_label=0,
-                        zero_division=0
-                    )
+                        zero_division=0,
+                    ),
+
+                "Precision Compra":
+                    precision_score(
+                        y_test,
+                        pred,
+                        pos_label=1,
+                        zero_division=0,
+                    ),
+
+                "Recall Compra":
+                    recall_score(
+                        y_test,
+                        pred,
+                        pos_label=1,
+                        zero_division=0,
+                    ),
             }
         )
 
@@ -470,7 +410,7 @@ def entrenar_modelos(data):
             confusion_matrix(
                 y_test,
                 pred,
-                labels=[0, 1]
+                labels=[0, 1],
             )
         )
 
@@ -482,31 +422,30 @@ def entrenar_modelos(data):
     # FEATURE IMPORTANCE
     # --------------------------------------------------------
 
-    random_forest = (
-        modelos["Random Forest"]
-    )
-
-    importancia = pd.DataFrame(
-        {
-            "Variable":
-                X.columns,
-
-            "Importancia":
-                random_forest.feature_importances_
-        }
-    )
+    rf = modelos[
+        "Random Forest"
+    ]
 
     importancia = (
-        importancia
+        pd.DataFrame(
+            {
+                "Variable":
+                    X.columns,
+
+                "Importancia":
+                    rf.feature_importances_,
+            }
+        )
         .sort_values(
             "Importancia",
-            ascending=False
+            ascending=False,
         )
-        .reset_index(drop=True)
+        .reset_index(
+            drop=True
+        )
     )
 
     return {
-
         "X":
             X,
 
@@ -539,9 +478,6 @@ def entrenar_modelos(data):
 
         "importancia":
             importancia,
-
-        "scaler":
-            scaler
     }
 
 
@@ -573,32 +509,26 @@ pagina = st.sidebar.radio(
     "Navegación",
     [
         "🏠 Inicio",
-        "📊 Dataset limpio",
-        "🔎 Exploración interactiva",
+        "📊 Dataset y EDA",
         "🎛️ Comportamiento vs Revenue",
         "📅 Mayo vs Noviembre",
-        "👥 Nuevos vs recurrentes",
+        "👥 New vs Returning",
         "🛍️ Conversión",
-        "🔥 Relaciones entre variables",
+        "🔥 Correlaciones",
         "⚙️ Preparación del modelo",
-        "🤖 Modelos de Machine Learning",
+        "🤖 Modelos",
         "📊 Comparación de modelos",
         "🌲 Random Forest",
         "📈 Variables importantes",
-        "💼 Propuesta de negocio y conclusiones"
-    ]
+        "💼 Propuesta de negocio",
+    ],
 )
 
 
 st.sidebar.divider()
 
-
-# ============================================================
-# FILTROS
-# ============================================================
-
 st.sidebar.subheader(
-    "Filtros exploratorios"
+    "Filtros de exploración"
 )
 
 
@@ -615,7 +545,7 @@ meses_seleccionados = (
     st.sidebar.multiselect(
         "Mes",
         meses_disponibles,
-        default=meses_disponibles
+        default=meses_disponibles,
     )
 )
 
@@ -634,20 +564,18 @@ visitantes_seleccionados = (
     st.sidebar.multiselect(
         "Tipo de visitante",
         visitantes_disponibles,
-        default=visitantes_disponibles
+        default=visitantes_disponibles,
     )
 )
 
 
-dia_seleccionado = (
-    st.sidebar.selectbox(
-        "Tipo de día",
-        [
-            "Todos",
-            "Entre semana",
-            "Fin de semana"
-        ]
-    )
+dia = st.sidebar.selectbox(
+    "Tipo de día",
+    [
+        "Todos",
+        "Entre semana",
+        "Fin de semana",
+    ],
 )
 
 
@@ -670,10 +598,7 @@ df_filtrado = df[
 ].copy()
 
 
-if (
-    dia_seleccionado
-    == "Entre semana"
-):
+if dia == "Entre semana":
 
     df_filtrado = df_filtrado[
         df_filtrado[
@@ -682,10 +607,7 @@ if (
     ]
 
 
-elif (
-    dia_seleccionado
-    == "Fin de semana"
-):
+elif dia == "Fin de semana":
 
     df_filtrado = df_filtrado[
         df_filtrado[
@@ -696,17 +618,15 @@ elif (
 
 st.sidebar.metric(
     "Sesiones visibles",
-    f"{len(df_filtrado):,}"
+    f"{len(df_filtrado):,}",
 )
 
 
 st.sidebar.caption(
     """
-    Estos filtros afectan únicamente
-    el análisis exploratorio.
+    Los filtros solo afectan el EDA.
 
-    Los modelos utilizan siempre
-    el dataset limpio completo.
+    Los modelos siempre usan el dataset limpio completo.
     """
 )
 
@@ -714,10 +634,7 @@ st.sidebar.caption(
 if len(df_filtrado) == 0:
 
     st.warning(
-        """
-        No existen sesiones con
-        los filtros seleccionados.
-        """
+        "No existen sesiones para los filtros seleccionados."
     )
 
     st.stop()
@@ -730,44 +647,33 @@ if len(df_filtrado) == 0:
 if pagina == "🏠 Inicio":
 
     st.title(
-        "🛒 Comportamiento de usuarios en e-commerce"
-    )
-
-    st.subheader(
-        "Online Shoppers Purchasing Intention"
+        "🛒 Análisis del comportamiento de usuarios en e-commerce"
     )
 
     st.write(
         """
-        Este dashboard transforma el análisis realizado
-        en Google Colab en una herramienta interactiva
-        para estudiar el comportamiento de los usuarios
-        durante el proceso de compra.
+        El objetivo es identificar qué características del
+        comportamiento de navegación se relacionan con la decisión
+        de compra y construir un modelo de clasificación que estime
+        si una sesión terminará en compra (`Revenue=True`) o no.
         """
     )
 
     st.info(
         """
-        ### Pregunta de negocio
-
-        ¿Qué características distinguen a las sesiones
-        que terminan en compra y cómo podemos utilizar
-        esos patrones para mejorar la conversión?
+        **Hipótesis de negocio:** existen patrones dentro del
+        comportamiento de navegación que distinguen sesiones con
+        compra de sesiones sin compra y que pueden apoyar decisiones
+        dentro de una empresa de e-commerce.
         """
     )
 
     st.success(
         """
-        ### Propuesta
-
-        Analizar qué hace diferente a noviembre,
-        estudiar qué patrones podrían orientar mejoras
-        durante mayo y comparar el comportamiento
-        de visitantes nuevos y recurrentes.
-
-        Posteriormente, utilizar Random Forest para
-        identificar señales de compra generadas durante
-        la navegación.
+        **Propuesta de negocio:** estudiar qué distingue a noviembre,
+        compararlo con mayo —mes con alto volumen de sesiones—,
+        segmentar por tipo de visitante y utilizar Random Forest para
+        analizar las señales generadas durante la navegación.
         """
     )
 
@@ -787,116 +693,55 @@ if pagina == "🏠 Inicio":
 
     col1.metric(
         "Sesiones",
-        f"{total:,}"
+        f"{total:,}",
     )
 
     col2.metric(
         "Compras",
-        f"{compras:,}"
+        f"{compras:,}",
     )
 
     col3.metric(
         "No compras",
-        f"{total-compras:,}"
+        f"{total-compras:,}",
     )
 
     col4.metric(
         "Conversión",
-        f"{tasa_conversion(df_filtrado):.2f}%"
+        f"{tasa_conversion(df_filtrado):.2f}%",
     )
 
-    st.divider()
-
-    temp = agregar_resultado(
+    temp = con_resultado(
         df_filtrado
     )
 
-    col1, col2 = st.columns(
-        [1.2, 1]
+    fig = px.pie(
+        temp[
+            "Resultado"
+        ]
+        .value_counts()
+        .rename_axis(
+            "Resultado"
+        )
+        .reset_index(
+            name="Sesiones"
+        ),
+        names="Resultado",
+        values="Sesiones",
+        hole=0.55,
+        title="Distribución de Revenue",
     )
 
-    with col1:
-
-        revenue_conteo = (
-            temp[
-                "Resultado"
-            ]
-            .value_counts()
-            .rename_axis(
-                "Resultado"
-            )
-            .reset_index(
-                name="Sesiones"
-            )
-        )
-
-        fig = px.pie(
-            revenue_conteo,
-            names="Resultado",
-            values="Sesiones",
-            hole=0.55,
-            title="Distribución de Revenue"
-        )
-
-        fig.update_traces(
-            textinfo="percent+label"
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-    with col2:
-
-        st.subheader(
-            "Variable objetivo"
-        )
-
-        st.code(
-            "Revenue"
-        )
-
-        st.write(
-            """
-            **True:** sesión con compra.
-
-            **False:** sesión sin compra.
-            """
-        )
-
-        st.warning(
-            """
-            Revenue está desbalanceado.
-
-            Por eso Accuracy no debe
-            utilizarse como única métrica.
-            """
-        )
-
-    st.divider()
-
-    st.subheader(
-        "Flujo del proyecto"
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
     )
 
-    st.write(
+    st.warning(
         """
-        1. Limpieza del dataset
-
-        2. EDA
-
-        3. Exploración interactiva
-
-        4. Análisis Mayo vs Noviembre
-
-        5. Nuevos vs recurrentes
-
-        6. Modelos supervisados
-
-        7. Random Forest
-
-        8. Propuesta de negocio
+        Revenue está desbalanceado: la mayoría de las sesiones no
+        termina en compra. Por ello, Accuracy no debe interpretarse
+        como la única métrica de desempeño.
         """
     )
 
@@ -911,27 +756,19 @@ if pagina == "🏠 Inicio":
         - Santiago Becerril Martínez
         - Daniela Jayani Magdaleno Rojas
         - Mariana Ruiz Ramírez
-        - Christofer Muñiz Martínez
+        - Christofer Muñiz Martinez
         """
     )
 
 
 # ============================================================
-# DATASET LIMPIO
+# DATASET Y EDA
 # ============================================================
 
-elif pagina == "📊 Dataset limpio":
+elif pagina == "📊 Dataset y EDA":
 
     st.title(
-        "📊 Dataset limpio"
-    )
-
-    st.write(
-        """
-        Se utiliza el mismo proceso
-        de limpieza desarrollado
-        en Google Colab.
-        """
+        "📊 Dataset y EDA"
     )
 
     col1, col2, col3, col4 = (
@@ -939,638 +776,561 @@ elif pagina == "📊 Dataset limpio":
     )
 
     col1.metric(
-        "Filas originales",
-        f"{len(df_original):,}"
+        "Registros originales",
+        f"{len(df_original):,}",
     )
 
     col2.metric(
         "Duplicados",
-        f"{duplicados:,}"
+        f"{duplicados:,}",
     )
 
     col3.metric(
-        "Filas limpias",
-        f"{len(df):,}"
+        "Registros limpios",
+        f"{len(df):,}",
     )
 
     col4.metric(
         "Columnas",
-        df.shape[1]
+        df.shape[1],
     )
 
-    st.success(
-        f"""
-        Se eliminaron **{duplicados} registros duplicados**.
-
-        El análisis utiliza
-        **{len(df):,} registros limpios**.
-        """
-    )
-
-    tab1, tab2, tab3, tab4 = st.tabs(
+    tabs = st.tabs(
         [
-            "Vista de datos",
-            "Estadísticas",
-            "Calidad",
-            "Metadatos"
+            "Datos",
+            "Revenue",
+            "Variable numérica",
+            "VisitorType",
+            "Mes",
+            "Weekend",
         ]
     )
 
-    with tab1:
+
+    # --------------------------------------------------------
+    # DATOS
+    # --------------------------------------------------------
+
+    with tabs[0]:
 
         st.dataframe(
             df_filtrado,
             use_container_width=True,
-            height=500
+            height=500,
         )
 
-    with tab2:
 
-        st.dataframe(
-            df_filtrado[
-                variables_numericas
-            ].describe().T,
-            use_container_width=True
+    # --------------------------------------------------------
+    # REVENUE
+    # --------------------------------------------------------
+
+    with tabs[1]:
+
+        temp = con_resultado(
+            df_filtrado
         )
 
-    with tab3:
+        conteo = (
+            temp[
+                "Resultado"
+            ]
+            .value_counts()
+            .rename_axis(
+                "Resultado"
+            )
+            .reset_index(
+                name="Sesiones"
+            )
+        )
+
+        fig = px.bar(
+            conteo,
+            x="Resultado",
+            y="Sesiones",
+            text_auto=True,
+            title="Distribución de Revenue",
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+
+
+    # --------------------------------------------------------
+    # VARIABLE NUMÉRICA
+    # --------------------------------------------------------
+
+    with tabs[2]:
+
+        variable_eda = (
+            st.selectbox(
+                "Variable numérica",
+                variables_numericas_eda,
+                key="variable_eda",
+            )
+        )
+
+        temp = con_resultado(
+            df_filtrado
+        )
 
         col1, col2 = (
             st.columns(2)
         )
 
-        col1.metric(
-            "Valores nulos",
-            int(
-                df_original
-                .isna()
-                .sum()
-                .sum()
+        with col1:
+
+            fig = px.histogram(
+                temp,
+                x=variable_eda,
+                color="Resultado",
+                nbins=40,
+                barmode="overlay",
+                title=(
+                    f"Distribución de {variable_eda}"
+                ),
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+            )
+
+        with col2:
+
+            fig = px.box(
+                temp,
+                x="Resultado",
+                y=variable_eda,
+                color="Resultado",
+                points="outliers",
+                title=(
+                    f"{variable_eda}: compra vs no compra"
+                ),
+            )
+
+            st.plotly_chart(
+                fig,
+                use_container_width=True,
+            )
+
+        if (
+            variable_eda
+            == "PageValues"
+        ):
+
+            st.info(
+                """
+                PageValues muestra una asociación fuerte con Revenue,
+                pero se elimina antes del modelado por posible fuga
+                de objetivo.
+                """
+            )
+
+
+    # --------------------------------------------------------
+    # VISITOR TYPE
+    # --------------------------------------------------------
+
+    with tabs[3]:
+
+        visitante = (
+            df_filtrado
+            .groupby(
+                "VisitorType",
+                observed=True,
+            )
+            .agg(
+                Sesiones=(
+                    "Revenue",
+                    "size",
+                ),
+                Conversion=(
+                    "Revenue",
+                    "mean",
+                ),
+            )
+            .reset_index()
+        )
+
+        visitante[
+            "Conversion"
+        ] *= 100
+
+        fig = px.bar(
+            visitante,
+            x="VisitorType",
+            y="Conversion",
+            hover_data=[
+                "Sesiones"
+            ],
+            text_auto=".1f",
+            labels={
+                "Conversion":
+                    "Conversión (%)",
+            },
+            title=(
+                "Porcentaje de compra por tipo de visitante"
+            ),
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+
+
+    # --------------------------------------------------------
+    # MES
+    # --------------------------------------------------------
+
+    with tabs[4]:
+
+        resumen_mes = (
+            df_filtrado
+            .groupby(
+                "Month",
+                observed=True,
+            )
+            .agg(
+                Sesiones=(
+                    "Revenue",
+                    "size",
+                ),
+                Conversion=(
+                    "Revenue",
+                    "mean",
+                ),
+            )
+            .reset_index()
+        )
+
+        resumen_mes[
+            "Conversion"
+        ] *= 100
+
+        resumen_mes[
+            "Month"
+        ] = pd.Categorical(
+            resumen_mes[
+                "Month"
+            ],
+            categories=orden_meses,
+            ordered=True,
+        )
+
+        resumen_mes = (
+            resumen_mes
+            .sort_values(
+                "Month"
             )
         )
 
-        col2.metric(
-            "Duplicados originales",
-            duplicados
+        fig = px.line(
+            resumen_mes,
+            x="Month",
+            y="Conversion",
+            markers=True,
+            hover_data=[
+                "Sesiones"
+            ],
+            labels={
+                "Conversion":
+                    "Conversión (%)",
+            },
+            title=(
+                "Conversión por mes"
+            ),
         )
 
-    with tab4:
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
 
-        tipos = pd.DataFrame(
+
+    # --------------------------------------------------------
+    # WEEKEND
+    # --------------------------------------------------------
+
+    with tabs[5]:
+
+        weekend = (
+            df_filtrado
+            .groupby(
+                "Weekend"
+            )
+            .agg(
+                Sesiones=(
+                    "Revenue",
+                    "size",
+                ),
+                Conversion=(
+                    "Revenue",
+                    "mean",
+                ),
+            )
+            .reset_index()
+        )
+
+        weekend[
+            "Conversion"
+        ] *= 100
+
+        weekend[
+            "Tipo"
+        ] = weekend[
+            "Weekend"
+        ].map(
             {
-                "Variable":
-                    df.columns,
+                False:
+                    "Entre semana",
 
-                "Tipo":
-                    [
-                        str(tipo)
-                        for tipo
-                        in df.dtypes
-                    ]
+                True:
+                    "Fin de semana",
             }
         )
 
-        st.dataframe(
-            tipos,
+        fig = px.bar(
+            weekend,
+            x="Tipo",
+            y="Conversion",
+            hover_data=[
+                "Sesiones"
+            ],
+            text_auto=".1f",
+            labels={
+                "Conversion":
+                    "Conversión (%)",
+            },
+            title=(
+                "Conversión: fin de semana vs entre semana"
+            ),
+        )
+
+        st.plotly_chart(
+            fig,
             use_container_width=True,
-            hide_index=True
         )
 
     st.caption(
-        """
-        Fuente: UCI Machine Learning Repository —
-        Online Shoppers Purchasing Intention Dataset.
-        """
+        "Fuente: UCI Machine Learning Repository — "
+        "Online Shoppers Purchasing Intention Dataset."
     )
     # ============================================================
-# EXPLORACIÓN INTERACTIVA
-# ============================================================
-
-elif pagina == "🔎 Exploración interactiva":
-
-    st.title(
-        "🔎 Exploración interactiva"
-    )
-
-    st.write(
-        """
-        Selecciona una variable y modifica su rango
-        para observar cómo cambia Revenue utilizando
-        únicamente sesiones reales del dataset limpio.
-        """
-    )
-
-    variable = st.selectbox(
-        "Variable a analizar",
-        variables_numericas
-    )
-
-    minimo = float(
-        df_filtrado[variable].min()
-    )
-
-    maximo = float(
-        df_filtrado[variable].max()
-    )
-
-    if maximo > minimo:
-
-        rango = st.slider(
-            f"Rango de {variable}",
-            min_value=minimo,
-            max_value=maximo,
-            value=(minimo, maximo),
-            step=paso_slider(
-                df_filtrado[variable]
-            )
-        )
-
-        df_exploracion = df_filtrado[
-            df_filtrado[variable].between(
-                rango[0],
-                rango[1]
-            )
-        ].copy()
-
-    else:
-
-        df_exploracion = (
-            df_filtrado.copy()
-        )
-
-    if len(df_exploracion) == 0:
-
-        st.warning(
-            """
-            No existen sesiones
-            en ese rango.
-            """
-        )
-
-        st.stop()
-
-    conversion_actual = (
-        tasa_conversion(
-            df_exploracion
-        )
-    )
-
-    conversion_base = (
-        tasa_conversion(
-            df_filtrado
-        )
-    )
-
-    diferencia = (
-        conversion_actual
-        - conversion_base
-    )
-
-    compras = int(
-        df_exploracion[
-            "Revenue"
-        ].sum()
-    )
-
-    col1, col2, col3, col4 = (
-        st.columns(4)
-    )
-
-    col1.metric(
-        "Sesiones reales",
-        f"{len(df_exploracion):,}"
-    )
-
-    col2.metric(
-        "Compras",
-        f"{compras:,}"
-    )
-
-    col3.metric(
-        "No compras",
-        f"{len(df_exploracion)-compras:,}"
-    )
-
-    col4.metric(
-        "Conversión",
-        f"{conversion_actual:.2f}%",
-        delta=f"{diferencia:+.2f} pp"
-    )
-
-    temp = agregar_resultado(
-        df_exploracion
-    )
-
-    col1, col2 = (
-        st.columns(2)
-    )
-
-    with col1:
-
-        fig = px.histogram(
-            temp,
-            x=variable,
-            color="Resultado",
-            nbins=40,
-            barmode="overlay",
-            title=(
-                f"Distribución de {variable}"
-            )
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-    with col2:
-
-        fig = px.box(
-            temp,
-            x="Resultado",
-            y=variable,
-            color="Resultado",
-            points="outliers",
-            title=(
-                f"{variable}: Compra vs No compra"
-            )
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
-
-    st.subheader(
-        "📈 Variable vs tasa de compra"
-    )
-
-    datos_rangos = (
-        df_filtrado[
-            [variable, "Revenue"]
-        ]
-        .dropna()
-        .copy()
-    )
-
-    try:
-
-        datos_rangos["Rango"] = (
-            pd.qcut(
-                datos_rangos[variable],
-                q=8,
-                duplicates="drop"
-            )
-        )
-
-    except ValueError:
-
-        datos_rangos["Rango"] = (
-            pd.cut(
-                datos_rangos[variable],
-                bins=8,
-                duplicates="drop"
-            )
-        )
-
-    conversion_rangos = (
-        datos_rangos
-        .groupby(
-            "Rango",
-            observed=True
-        )
-        .agg(
-            Sesiones=(
-                "Revenue",
-                "size"
-            ),
-            Conversion=(
-                "Revenue",
-                "mean"
-            )
-        )
-        .reset_index()
-    )
-
-    conversion_rangos[
-        "Conversion"
-    ] *= 100
-
-    conversion_rangos[
-        "Rango"
-    ] = (
-        conversion_rangos[
-            "Rango"
-        ]
-        .astype(str)
-    )
-
-    fig = px.bar(
-        conversion_rangos,
-        x="Rango",
-        y="Conversion",
-        hover_data=[
-            "Sesiones"
-        ],
-        text_auto=".1f",
-        labels={
-            "Conversion":
-                "Tasa de compra (%)",
-            "Rango":
-                variable
-        },
-        title=(
-            f"Tasa de compra según {variable}"
-        )
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-    if variable == "ProductRelated":
-
-        st.info(
-            """
-            ProductRelated representa la cantidad de páginas
-            relacionadas con productos visitadas durante
-            una sesión.
-
-            Se utiliza como aproximación a la interacción
-            con productos, pero no representa literalmente
-            el número de clicks.
-            """
-        )
-
-    if variable == "PageValues":
-
-        st.warning(
-            """
-            PageValues se utiliza en el EDA, pero se elimina
-            posteriormente del Machine Learning por posible
-            riesgo de target leakage.
-            """
-        )
-
-
-# ============================================================
 # COMPORTAMIENTO VS REVENUE
+# SINGLE-VALUE SLIDERS / UMBRALES
 # ============================================================
 
 elif pagina == "🎛️ Comportamiento vs Revenue":
 
-    st.title(
-        "🎛️ Comportamiento vs Revenue"
-    )
+    st.title("🎛️ Comportamiento vs Revenue")
 
     st.write(
         """
-        Modifica diferentes características de navegación
-        y observa qué ocurre con Revenue.
+        En lugar de seleccionar rangos, cada slider define **un solo
+        valor de referencia**. Las sesiones siguen siendo registros
+        reales del dataset; los controles funcionan como umbrales.
         """
     )
 
     st.success(
         """
-        Los sliders filtran sesiones reales.
-
-        No generan usuarios artificiales.
+        Ejemplo: si bajas el máximo de Exit Rate, el dashboard muestra
+        únicamente las sesiones reales que cumplen ese criterio y
+        recalcula su tasa de compra.
         """
     )
 
-    prod_min = int(
-        df_filtrado[
-            "ProductRelated"
-        ].min()
-    )
-
-    prod_max = int(
-        df_filtrado[
-            "ProductRelated"
-        ].max()
-    )
-
-    prod_dur_min = float(
-        df_filtrado[
-            "ProductRelated_Duration"
-        ].min()
-    )
-
-    prod_dur_max = float(
-        df_filtrado[
-            "ProductRelated_Duration"
-        ].max()
-    )
-
-    bounce_min = float(
-        df_filtrado[
-            "BounceRates"
-        ].min()
-    )
-
-    bounce_max = float(
-        df_filtrado[
-            "BounceRates"
-        ].max()
-    )
-
-    exit_min = float(
-        df_filtrado[
-            "ExitRates"
-        ].min()
-    )
-
-    exit_max = float(
-        df_filtrado[
-            "ExitRates"
-        ].max()
-    )
-
-    admin_min = int(
-        df_filtrado[
-            "Administrative"
-        ].min()
-    )
-
-    admin_max = int(
-        df_filtrado[
-            "Administrative"
-        ].max()
-    )
-
-    info_min = int(
-        df_filtrado[
-            "Informational"
-        ].min()
-    )
-
-    info_max = int(
-        df_filtrado[
-            "Informational"
-        ].max()
-    )
-
-    col1, col2 = (
-        st.columns(2)
-    )
+    col1, col2 = st.columns(2)
 
     with col1:
 
-        rango_prod = st.slider(
-            "Páginas de producto visitadas",
-            min_value=prod_min,
-            max_value=prod_max,
-            value=(
-                prod_min,
-                prod_max
-            )
-        )
-
-        rango_prod_dur = st.slider(
-            "Tiempo en páginas de producto",
-            min_value=prod_dur_min,
-            max_value=prod_dur_max,
-            value=(
-                prod_dur_min,
-                prod_dur_max
+        min_prod_duration = st.slider(
+            "Duración mínima en páginas de producto",
+            min_value=0.0,
+            max_value=float(
+                np.quantile(
+                    df_filtrado[
+                        "ProductRelated_Duration"
+                    ],
+                    0.99,
+                )
             ),
-            step=paso_slider(
-                df_filtrado[
-                    "ProductRelated_Duration"
-                ]
-            )
+            value=0.0,
+            step=25.0,
         )
 
-        rango_admin = st.slider(
-            "Páginas administrativas",
-            min_value=admin_min,
-            max_value=admin_max,
-            value=(
-                admin_min,
-                admin_max
-            )
+        min_admin_duration = st.slider(
+            "Duración mínima en páginas administrativas",
+            min_value=0.0,
+            max_value=float(
+                np.quantile(
+                    df_filtrado[
+                        "Administrative_Duration"
+                    ],
+                    0.99,
+                )
+            ),
+            value=0.0,
+            step=5.0,
+        )
+
+        min_informational = st.slider(
+            "Mínimo de páginas informativas",
+            min_value=int(
+                df_filtrado[
+                    "Informational"
+                ].min()
+            ),
+            max_value=int(
+                df_filtrado[
+                    "Informational"
+                ].max()
+            ),
+            value=int(
+                df_filtrado[
+                    "Informational"
+                ].min()
+            ),
+            step=1,
         )
 
     with col2:
 
-        rango_bounce = st.slider(
-            "Bounce Rate",
-            min_value=bounce_min,
-            max_value=bounce_max,
-            value=(
-                bounce_min,
-                bounce_max
+        max_bounce = st.slider(
+            "Bounce Rate máximo",
+            min_value=float(
+                df_filtrado[
+                    "BounceRates"
+                ].min()
             ),
-            step=0.001
-        )
-
-        rango_exit = st.slider(
-            "Exit Rate",
-            min_value=exit_min,
-            max_value=exit_max,
-            value=(
-                exit_min,
-                exit_max
+            max_value=float(
+                df_filtrado[
+                    "BounceRates"
+                ].max()
             ),
-            step=0.001
+            value=float(
+                df_filtrado[
+                    "BounceRates"
+                ].max()
+            ),
+            step=0.001,
+            format="%.3f",
         )
 
-        rango_info = st.slider(
-            "Páginas informativas",
-            min_value=info_min,
-            max_value=info_max,
-            value=(
-                info_min,
-                info_max
-            )
+        max_exit = st.slider(
+            "Exit Rate máximo",
+            min_value=float(
+                df_filtrado[
+                    "ExitRates"
+                ].min()
+            ),
+            max_value=float(
+                df_filtrado[
+                    "ExitRates"
+                ].max()
+            ),
+            value=float(
+                df_filtrado[
+                    "ExitRates"
+                ].max()
+            ),
+            step=0.001,
+            format="%.3f",
         )
 
-    simulacion = df_filtrado[
-        df_filtrado[
-            "ProductRelated"
-        ].between(
-            rango_prod[0],
-            rango_prod[1]
+        min_info_duration = st.slider(
+            "Duración mínima en páginas informativas",
+            min_value=0.0,
+            max_value=float(
+                np.quantile(
+                    df_filtrado[
+                        "Informational_Duration"
+                    ],
+                    0.99,
+                )
+            ),
+            value=0.0,
+            step=5.0,
+        )
+
+    sesiones_seleccionadas = df_filtrado[
+        (
+            df_filtrado[
+                "ProductRelated_Duration"
+            ]
+            >= min_prod_duration
         )
         &
-        df_filtrado[
-            "ProductRelated_Duration"
-        ].between(
-            rango_prod_dur[0],
-            rango_prod_dur[1]
+        (
+            df_filtrado[
+                "Administrative_Duration"
+            ]
+            >= min_admin_duration
         )
         &
-        df_filtrado[
-            "BounceRates"
-        ].between(
-            rango_bounce[0],
-            rango_bounce[1]
+        (
+            df_filtrado[
+                "Informational"
+            ]
+            >= min_informational
         )
         &
-        df_filtrado[
-            "ExitRates"
-        ].between(
-            rango_exit[0],
-            rango_exit[1]
+        (
+            df_filtrado[
+                "Informational_Duration"
+            ]
+            >= min_info_duration
         )
         &
-        df_filtrado[
-            "Administrative"
-        ].between(
-            rango_admin[0],
-            rango_admin[1]
+        (
+            df_filtrado[
+                "BounceRates"
+            ]
+            <= max_bounce
         )
         &
-        df_filtrado[
-            "Informational"
-        ].between(
-            rango_info[0],
-            rango_info[1]
+        (
+            df_filtrado[
+                "ExitRates"
+            ]
+            <= max_exit
         )
     ].copy()
 
     st.divider()
 
-    if len(simulacion) == 0:
+    if len(
+        sesiones_seleccionadas
+    ) == 0:
 
         st.warning(
             """
-            No existen sesiones reales que cumplan
-            todos los parámetros.
-
-            Amplía alguno de los rangos.
+            No existen sesiones reales que cumplan simultáneamente
+            con todos los criterios. Ajusta alguno de los sliders.
             """
         )
 
     else:
 
-        conversion_original = (
+        conversion_base = (
             tasa_conversion(
                 df_filtrado
             )
         )
 
-        conversion_sim = (
+        conversion_seleccion = (
             tasa_conversion(
-                simulacion
+                sesiones_seleccionadas
             )
         )
 
-        cambio = (
-            conversion_sim
-            - conversion_original
-        )
-
         compras = int(
-            simulacion[
+            sesiones_seleccionadas[
                 "Revenue"
             ].sum()
-        )
-
-        no_compras = (
-            len(simulacion)
-            - compras
         )
 
         col1, col2, col3, col4 = (
@@ -1578,33 +1338,33 @@ elif pagina == "🎛️ Comportamiento vs Revenue":
         )
 
         col1.metric(
-            "Sesiones",
-            f"{len(simulacion):,}"
+            "Sesiones reales",
+            f"{len(sesiones_seleccionadas):,}",
         )
 
         col2.metric(
             "Compras",
-            f"{compras:,}"
+            f"{compras:,}",
         )
 
         col3.metric(
             "No compras",
-            f"{no_compras:,}"
+            f"{len(sesiones_seleccionadas)-compras:,}",
         )
 
         col4.metric(
-            "Tasa de compra",
-            f"{conversion_sim:.2f}%",
-            delta=f"{cambio:+.2f} pp"
+            "Conversión",
+            f"{conversion_seleccion:.2f}%",
+            delta=(
+                f"{conversion_seleccion-conversion_base:+.2f} pp"
+            ),
         )
 
-        temp = agregar_resultado(
-            simulacion
+        temp = con_resultado(
+            sesiones_seleccionadas
         )
 
-        col1, col2 = (
-            st.columns(2)
-        )
+        col1, col2 = st.columns(2)
 
         with col1:
 
@@ -1627,59 +1387,45 @@ elif pagina == "🎛️ Comportamiento vs Revenue":
                 values="Sesiones",
                 hole=0.5,
                 title=(
-                    "Revenue de sesiones seleccionadas"
-                )
+                    "Revenue de las sesiones seleccionadas"
+                ),
             )
 
             st.plotly_chart(
                 fig,
-                use_container_width=True
+                use_container_width=True,
             )
 
         with col2:
 
-            fig = px.histogram(
+            fig = px.scatter(
                 temp,
-                x="ProductRelated",
+                x="ProductRelated_Duration",
+                y="ExitRates",
                 color="Resultado",
-                barmode="overlay",
-                nbins=35,
+                opacity=0.60,
+                hover_data=[
+                    "BounceRates",
+                    "Administrative_Duration",
+                    "Informational",
+                    "Month",
+                    "VisitorType",
+                ],
                 title=(
-                    "Interacción con productos"
-                )
+                    "Duración en producto vs Exit Rate"
+                ),
             )
 
             st.plotly_chart(
                 fig,
-                use_container_width=True
+                use_container_width=True,
             )
-
-        fig = px.scatter(
-            temp,
-            x="ProductRelated",
-            y="ProductRelated_Duration",
-            color="Resultado",
-            opacity=0.60,
-            hover_data=[
-                "BounceRates",
-                "ExitRates",
-                "VisitorType",
-                "Month"
-            ],
-            title=(
-                "Páginas de producto vs duración"
-            )
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True
-        )
 
         st.warning(
             """
-            Estas relaciones son asociaciones observadas
-            en los datos. No demuestran causalidad.
+            Cambiar un umbral no demuestra que modificar esa variable
+            cause un aumento en las compras. Esta vista muestra
+            asociaciones dentro de las sesiones observadas.
             """
         )
 
@@ -1696,25 +1442,28 @@ elif pagina == "📅 Mayo vs Noviembre":
 
     st.write(
         """
-        Analizamos qué hace diferente a noviembre respecto
-        a mayo y qué representaría mejorar el Conversion Rate
+        La propuesta de negocio se concentra en entender qué
+        diferencias observadas existen entre noviembre y mayo,
+        y en cuantificar qué representaría mejorar la conversión
         de mayo.
         """
     )
 
-    # Se utiliza el dataset limpio completo
-    # para que la comparación no dependa de los filtros laterales.
-
     df_mayo = df[
-        df["Month"] == "May"
+        df[
+            "Month"
+        ] == "May"
     ].copy()
 
     df_noviembre = df[
-        df["Month"] == "Nov"
+        df[
+            "Month"
+        ] == "Nov"
     ].copy()
 
+
     # ========================================================
-    # MÉTRICAS
+    # MÉTRICAS GENERALES
     # ========================================================
 
     sesiones_mayo = len(
@@ -1737,11 +1486,6 @@ elif pagina == "📅 Mayo vs Noviembre":
         ].sum()
     )
 
-    no_compras_mayo = (
-        sesiones_mayo
-        - compras_mayo
-    )
-
     conversion_mayo = (
         tasa_conversion(
             df_mayo
@@ -1754,13 +1498,10 @@ elif pagina == "📅 Mayo vs Noviembre":
         )
     )
 
+
     # ========================================================
     # MAYO VS NOVIEMBRE
     # ========================================================
-
-    st.subheader(
-        "📊 Situación observada"
-    )
 
     col1, col2 = (
         st.columns(2)
@@ -1778,17 +1519,17 @@ elif pagina == "📅 Mayo vs Noviembre":
 
         a.metric(
             "Sesiones",
-            f"{sesiones_mayo:,}"
+            f"{sesiones_mayo:,}",
         )
 
         b.metric(
             "Compras",
-            f"{compras_mayo:,}"
+            f"{compras_mayo:,}",
         )
 
         c.metric(
             "Conversión",
-            f"{conversion_mayo:.2f}%"
+            f"{conversion_mayo:.2f}%",
         )
 
     with col2:
@@ -1803,62 +1544,70 @@ elif pagina == "📅 Mayo vs Noviembre":
 
         a.metric(
             "Sesiones",
-            f"{sesiones_noviembre:,}"
+            f"{sesiones_noviembre:,}",
         )
 
         b.metric(
             "Compras",
-            f"{compras_noviembre:,}"
+            f"{compras_noviembre:,}",
         )
 
         c.metric(
             "Conversión",
-            f"{conversion_noviembre:.2f}%"
+            f"{conversion_noviembre:.2f}%",
         )
 
-    comparacion_conversion = pd.DataFrame(
-        {
-            "Mes": [
-                "Mayo",
-                "Noviembre"
-            ],
-            "Conversion Rate": [
-                conversion_mayo,
-                conversion_noviembre
-            ],
-            "Sesiones": [
-                sesiones_mayo,
-                sesiones_noviembre
-            ],
-            "Compras": [
-                compras_mayo,
-                compras_noviembre
-            ]
-        }
+
+    comparacion_conversion = (
+        pd.DataFrame(
+            {
+                "Mes": [
+                    "Mayo",
+                    "Noviembre",
+                ],
+
+                "Conversión": [
+                    conversion_mayo,
+                    conversion_noviembre,
+                ],
+
+                "Sesiones": [
+                    sesiones_mayo,
+                    sesiones_noviembre,
+                ],
+
+                "Compras": [
+                    compras_mayo,
+                    compras_noviembre,
+                ],
+            }
+        )
     )
+
 
     fig = px.bar(
         comparacion_conversion,
         x="Mes",
-        y="Conversion Rate",
+        y="Conversión",
         text_auto=".2f",
         hover_data=[
             "Sesiones",
-            "Compras"
+            "Compras",
         ],
         labels={
-            "Conversion Rate":
-                "Conversion Rate (%)"
+            "Conversión":
+                "Conversión (%)",
         },
         title=(
-            "Conversion Rate: Mayo vs Noviembre"
-        )
+            "Conversión: Mayo vs Noviembre"
+        ),
     )
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
+
 
     # ========================================================
     # QUÉ HACE DIFERENTE A NOVIEMBRE
@@ -1870,62 +1619,39 @@ elif pagina == "📅 Mayo vs Noviembre":
         "🔎 ¿Qué hace diferente a noviembre?"
     )
 
-    st.write(
-        """
-        Selecciona una variable para comparar
-        su comportamiento en mayo y noviembre.
-        """
-    )
-
-    variables_comparacion = [
-        "ProductRelated",
-        "ProductRelated_Duration",
-        "Administrative",
-        "Administrative_Duration",
-        "Informational",
-        "Informational_Duration",
-        "BounceRates",
-        "ExitRates",
-        "PageValues"
-    ]
 
     variable_comparar = (
         st.selectbox(
             "Variable a comparar",
-            variables_comparacion
+            variables_mayo_noviembre,
         )
     )
 
-    media_mayo = (
+
+    mayo_promedio = (
         df_mayo[
             variable_comparar
         ].mean()
     )
 
-    media_noviembre = (
+    noviembre_promedio = (
         df_noviembre[
             variable_comparar
         ].mean()
     )
 
     diferencia = (
-        media_noviembre
-        - media_mayo
+        noviembre_promedio
+        - mayo_promedio
     )
 
-    if media_mayo != 0:
+    cambio_pct = (
+        safe_percent_change(
+            mayo_promedio,
+            noviembre_promedio,
+        )
+    )
 
-        cambio_relativo = (
-            (
-                media_noviembre
-                / media_mayo
-            )
-            - 1
-        ) * 100
-
-    else:
-
-        cambio_relativo = 0
 
     col1, col2, col3, col4 = (
         st.columns(4)
@@ -1933,43 +1659,55 @@ elif pagina == "📅 Mayo vs Noviembre":
 
     col1.metric(
         "Promedio Mayo",
-        f"{media_mayo:,.3f}"
+        f"{mayo_promedio:,.3f}",
     )
 
     col2.metric(
         "Promedio Noviembre",
-        f"{media_noviembre:,.3f}"
+        f"{noviembre_promedio:,.3f}",
     )
 
     col3.metric(
         "Diferencia",
-        f"{diferencia:+,.3f}"
+        f"{diferencia:+,.3f}",
     )
 
     col4.metric(
         "Cambio relativo",
-        f"{cambio_relativo:+.1f}%"
+        (
+            "N/A"
+            if pd.isna(
+                cambio_pct
+            )
+            else f"{cambio_pct:+.1f}%"
+        ),
     )
 
-    comparacion_variable = pd.concat(
+
+    comparacion = pd.concat(
         [
             df_mayo[
-                [variable_comparar]
+                [
+                    variable_comparar
+                ]
             ].assign(
                 Mes="Mayo"
             ),
 
             df_noviembre[
-                [variable_comparar]
+                [
+                    variable_comparar
+                ]
             ].assign(
                 Mes="Noviembre"
-            )
+            ),
         ],
-        ignore_index=True
+        ignore_index=True,
     )
 
+
     fig = px.box(
-        comparacion_variable,
+        comparacion,
         x="Mes",
         y=variable_comparar,
         color="Mes",
@@ -1977,742 +1715,548 @@ elif pagina == "📅 Mayo vs Noviembre":
         title=(
             f"{variable_comparar}: "
             "Mayo vs Noviembre"
-        )
+        ),
     )
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
+
     # ========================================================
-    # TABLA GENERAL MAYO VS NOVIEMBRE
+    # TABLA GENERAL
     # ========================================================
 
     st.subheader(
         "📋 Comparación general"
     )
 
-    resumen_variables = []
 
-    for variable in variables_comparacion:
+    resumen = []
 
-        valor_mayo = (
+
+    for variable in variables_mayo_noviembre:
+
+        may = (
             df_mayo[
                 variable
             ].mean()
         )
 
-        valor_noviembre = (
+        nov = (
             df_noviembre[
                 variable
             ].mean()
         )
 
-        diferencia_variable = (
-            valor_noviembre
-            - valor_mayo
-        )
-
-        if valor_mayo != 0:
-
-            cambio_pct = (
-                (
-                    valor_noviembre
-                    / valor_mayo
-                    - 1
-                )
-                * 100
-            )
-
-        else:
-
-            cambio_pct = np.nan
-
-        resumen_variables.append(
+        resumen.append(
             {
                 "Variable":
                     variable,
 
                 "Mayo":
-                    valor_mayo,
+                    may,
 
                 "Noviembre":
-                    valor_noviembre,
+                    nov,
 
                 "Diferencia":
-                    diferencia_variable,
+                    nov - may,
 
                 "Cambio %":
-                    cambio_pct
+                    safe_percent_change(
+                        may,
+                        nov,
+                    ),
             }
         )
 
-    resumen_variables = (
-        pd.DataFrame(
-            resumen_variables
-        )
-    )
 
     st.dataframe(
-        resumen_variables.style.format(
-            {
-                "Mayo":
-                    "{:.3f}",
-
-                "Noviembre":
-                    "{:.3f}",
-
-                "Diferencia":
-                    "{:+.3f}",
-
-                "Cambio %":
-                    "{:+.1f}%"
-            }
-        ),
+        pd.DataFrame(
+            resumen
+        ).round(3),
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
 
+
     # ========================================================
-    # VISITOR TYPE MAYO VS NOVIEMBRE
+    # MONTH + VISITORTYPE
     # ========================================================
 
     st.divider()
 
     st.subheader(
-        "👥 Tipo de visitante"
+        "👥 Month + VisitorType"
     )
 
     st.write(
         """
-        Revisamos si parte de la diferencia entre ambos meses
-        está relacionada con la composición de los visitantes.
+        Igual que en el Colab, eliminamos `Other` en esta parte
+        para concentrarnos en New_Visitor y Returning_Visitor.
         """
     )
 
-    visitantes = pd.concat(
-        [
-            df_mayo.assign(
-                Mes_completo="Mayo"
-            ),
 
-            df_noviembre.assign(
-                Mes_completo="Noviembre"
-            )
-        ],
-        ignore_index=True
-    )
+    df_sin_other = df[
+        df[
+            "VisitorType"
+        ] != "Other"
+    ].copy()
 
-    resumen_visitantes = (
-        visitantes
+
+    analisis_mes_visitante = (
+        df_sin_other
         .groupby(
             [
-                "Mes_completo",
-                "VisitorType"
+                "Month",
+                "VisitorType",
             ],
-            observed=True
+            observed=True,
         )
         .agg(
-            Sesiones=(
+            Total_Sesiones=(
                 "Revenue",
-                "size"
+                "count",
             ),
 
-            Compras=(
+            Compras_Exitosas=(
                 "Revenue",
-                "sum"
+                "sum",
             ),
 
-            Conversion=(
+            Tasa_Conversion=(
                 "Revenue",
-                "mean"
-            )
+                lambda x:
+                    x.mean()
+                    * 100,
+            ),
+
+            Promedio_Duracion_Producto=(
+                "ProductRelated_Duration",
+                "mean",
+            ),
+
+            Tasa_Salida_Promedio=(
+                "ExitRates",
+                "mean",
+            ),
         )
         .reset_index()
     )
 
-    resumen_visitantes[
-        "Conversion"
-    ] *= 100
 
-    st.dataframe(
-        resumen_visitantes,
-        use_container_width=True,
-        hide_index=True
+    analisis_mes_visitante[
+        "Month"
+    ] = pd.Categorical(
+        analisis_mes_visitante[
+            "Month"
+        ],
+        categories=orden_meses,
+        ordered=True,
     )
 
-    fig = px.bar(
-        resumen_visitantes,
-        x="VisitorType",
-        y="Conversion",
-        color="Mes_completo",
-        barmode="group",
-        text_auto=".1f",
-        hover_data=[
-            "Sesiones",
-            "Compras"
-        ],
-        labels={
-            "VisitorType":
-                "Tipo de visitante",
 
-            "Conversion":
-                "Conversion Rate (%)",
-
-            "Mes_completo":
-                "Mes"
-        },
-        title=(
-            "Conversión por tipo de visitante"
+    analisis_mes_visitante = (
+        analisis_mes_visitante
+        .sort_values(
+            [
+                "Month",
+                "VisitorType",
+            ]
         )
     )
 
-    st.plotly_chart(
-        fig,
-        use_container_width=True
+
+    tab1, tab2 = st.tabs(
+        [
+            "Tasa de conversión",
+            "Duración en producto",
+        ]
     )
 
+
+    # --------------------------------------------------------
+    # CONVERSIÓN POR MES Y TIPO
+    # --------------------------------------------------------
+
+    with tab1:
+
+        fig = px.bar(
+            analisis_mes_visitante,
+            x="Month",
+            y="Tasa_Conversion",
+            color="VisitorType",
+            barmode="group",
+            hover_data=[
+                "Total_Sesiones",
+                "Compras_Exitosas",
+            ],
+            labels={
+                "Tasa_Conversion":
+                    "Conversión (%)",
+
+                "VisitorType":
+                    "Tipo de visitante",
+            },
+            title=(
+                "Tasa de conversión por mes "
+                "y tipo de visitante"
+            ),
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+
+
+    # --------------------------------------------------------
+    # DURACIÓN EN PRODUCTO
+    # --------------------------------------------------------
+
+    with tab2:
+
+        fig = px.bar(
+            analisis_mes_visitante,
+            x="Month",
+            y="Promedio_Duracion_Producto",
+            color="VisitorType",
+            barmode="group",
+            hover_data=[
+                "Total_Sesiones",
+                "Tasa_Salida_Promedio",
+            ],
+            labels={
+                "Promedio_Duracion_Producto":
+                    "Duración promedio",
+
+                "VisitorType":
+                    "Tipo de visitante",
+            },
+            title=(
+                "Duración promedio en páginas de producto "
+                "por mes y tipo de visitante"
+            ),
+        )
+
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+        )
+
+
     # ========================================================
-    # SIMULADOR DE CONVERSION RATE EN MAYO
+    # SIMULADOR DE MAYO
     # ========================================================
 
     st.divider()
 
     st.subheader(
-        "🎯 Simulador de mejora en Mayo"
+        "🎯 Proyección de mejora del Conversion Rate en Mayo"
     )
 
-    st.write(
-        """
-        Mueve el slider para proyectar cuántas sesiones
-        adicionales terminarían en compra si mejoramos
-        el Conversion Rate de mayo.
-        """
-    )
 
     st.info(
         """
-        En esta simulación el número de sesiones de mayo
-        permanece constante.
+        `Revenue` en este dataset es una variable binaria:
+        compra / no compra.
 
-        Solamente se modifica el Conversion Rate.
+        Por eso esta simulación proyecta
+        **sesiones con Revenue=True**,
+        no dinero directamente.
         """
     )
 
-    minimo_slider = float(
-        np.floor(
-            conversion_mayo
-        )
-    )
 
-    maximo_slider = float(
+    max_slider = float(
         max(
-            40,
+            40.0,
             np.ceil(
                 conversion_noviembre
                 + 10
-            )
-        )
-    )
-
-    valor_inicial = float(
-        round(
-            max(
-                conversion_mayo,
-                conversion_noviembre
             ),
-            1
         )
     )
 
-    valor_inicial = min(
-        valor_inicial,
-        maximo_slider
-    )
 
     conversion_objetivo = (
         st.slider(
             "Conversion Rate objetivo para Mayo",
-            min_value=minimo_slider,
-            max_value=maximo_slider,
-            value=valor_inicial,
-            step=0.5,
-            format="%.1f%%"
+            min_value=float(
+                round(
+                    conversion_mayo,
+                    2,
+                )
+            ),
+            max_value=max_slider,
+            value=float(
+                min(
+                    round(
+                        max(
+                            conversion_mayo,
+                            conversion_noviembre,
+                        ),
+                        2,
+                    ),
+                    max_slider,
+                )
+            ),
+            step=0.25,
+            format="%.2f%%",
         )
     )
 
+
     # ========================================================
-    # PROYECCIÓN DE REVENUE
+    # PROYECCIÓN
     # ========================================================
 
     compras_proyectadas = int(
         round(
             sesiones_mayo
-            * (
-                conversion_objetivo
-                / 100
-            )
+            * conversion_objetivo
+            / 100
         )
     )
+
 
     compras_adicionales = (
         compras_proyectadas
         - compras_mayo
     )
 
-    no_compras_proyectadas = (
-        sesiones_mayo
-        - compras_proyectadas
-    )
 
     mejora_pp = (
         conversion_objetivo
         - conversion_mayo
     )
 
-    if conversion_mayo > 0:
-
-        mejora_relativa = (
-            (
-                conversion_objetivo
-                / conversion_mayo
-            )
-            - 1
-        ) * 100
-
-    else:
-
-        mejora_relativa = 0
 
     col1, col2, col3, col4 = (
         st.columns(4)
     )
 
+
     col1.metric(
         "Conversión actual",
-        f"{conversion_mayo:.2f}%"
+        f"{conversion_mayo:.2f}%",
     )
+
 
     col2.metric(
         "Conversión objetivo",
         f"{conversion_objetivo:.2f}%",
-        delta=f"{mejora_pp:+.2f} pp"
+        delta=f"{mejora_pp:+.2f} pp",
     )
+
 
     col3.metric(
         "Revenue=True proyectado",
-        f"{compras_proyectadas:,}"
+        f"{compras_proyectadas:,}",
     )
+
 
     col4.metric(
         "Compras adicionales",
-        f"{compras_adicionales:+,}"
+        f"{compras_adicionales:+,}",
     )
 
-    st.caption(
-        f"""
-        Mejora relativa del Conversion Rate:
-        {mejora_relativa:.1f}%.
-        """
-    )
-
-    st.write(
-        f"""
-        Con las **{sesiones_mayo:,} sesiones reales de mayo**,
-        pasar de una conversión de **{conversion_mayo:.2f}%**
-        a **{conversion_objetivo:.2f}%** representaría
-        aproximadamente:
-
-        ### {compras_proyectadas:,} sesiones con Revenue=True
-
-        frente a:
-
-        ### {compras_mayo:,} compras observadas actualmente.
-
-        Esto representa:
-
-        ### {compras_adicionales:+,} compras adicionales.
-        """
-    )
 
     # ========================================================
-    # ACTUAL VS PROYECTADO
+    # GRÁFICA ACTUAL / OBJETIVO / NOVIEMBRE
     # ========================================================
 
-    escenario_revenue = pd.DataFrame(
+    escenario = pd.DataFrame(
         {
             "Escenario": [
                 "Mayo actual",
-                "Mayo proyectado"
+                "Mayo proyectado",
+                "Noviembre real",
             ],
 
-            "Compra": [
-                compras_mayo,
-                compras_proyectadas
+            "Conversion Rate": [
+                conversion_mayo,
+                conversion_objetivo,
+                conversion_noviembre,
             ],
-
-            "No compra": [
-                no_compras_mayo,
-                no_compras_proyectadas
-            ]
         }
     )
 
-    escenario_largo = (
-        escenario_revenue
-        .melt(
-            id_vars="Escenario",
-            var_name="Revenue",
-            value_name="Sesiones"
-        )
-    )
 
     fig = px.bar(
-        escenario_largo,
-        x="Escenario",
-        y="Sesiones",
-        color="Revenue",
-        barmode="stack",
-        text_auto=True,
-        title=(
-            "Cambio proyectado en Revenue de Mayo"
-        )
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-    # ========================================================
-    # MAYO ACTUAL / OBJETIVO / NOVIEMBRE
-    # ========================================================
-
-    escenarios_conversion = (
-        pd.DataFrame(
-            {
-                "Escenario": [
-                    "Mayo actual",
-                    "Mayo objetivo",
-                    "Noviembre real"
-                ],
-
-                "Conversion Rate": [
-                    conversion_mayo,
-                    conversion_objetivo,
-                    conversion_noviembre
-                ]
-            }
-        )
-    )
-
-    fig = px.bar(
-        escenarios_conversion,
+        escenario,
         x="Escenario",
         y="Conversion Rate",
         text_auto=".2f",
         labels={
             "Conversion Rate":
-                "Conversion Rate (%)"
+                "Conversión (%)",
         },
         title=(
             "Mayo actual vs objetivo vs Noviembre"
-        )
+        ),
     )
+
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
-    # ========================================================
-    # CURVA PROYECTADA
-    # ========================================================
 
-    st.subheader(
-        "📈 Impacto según Conversion Rate"
-    )
+    # ========================================================
+    # CURVA DE PROYECCIÓN
+    # ========================================================
 
     tasas = np.arange(
-        minimo_slider,
-        maximo_slider + 0.5,
-        0.5
+        float(
+            round(
+                conversion_mayo,
+                2,
+            )
+        ),
+        max_slider + 0.25,
+        0.25,
     )
+
 
     curva = pd.DataFrame(
         {
             "Conversion Rate":
-                tasas
+                tasas,
         }
     )
+
 
     curva[
         "Revenue=True proyectado"
     ] = (
         sesiones_mayo
-        * (
-            curva[
-                "Conversion Rate"
-            ]
-            / 100
-        )
+        * curva[
+            "Conversion Rate"
+        ]
+        / 100
     ).round()
+
 
     fig = px.line(
         curva,
         x="Conversion Rate",
         y="Revenue=True proyectado",
-        markers=True,
         labels={
             "Conversion Rate":
-                "Conversion Rate (%)",
+                "Conversión (%)",
 
             "Revenue=True proyectado":
-                "Sesiones con compra"
+                "Sesiones con compra",
         },
         title=(
             "Compras proyectadas según Conversion Rate"
-        )
+        ),
     )
+
 
     fig.add_vline(
         x=conversion_mayo,
         line_dash="dash",
-        annotation_text="Mayo actual"
+        annotation_text="Mayo actual",
     )
+
 
     fig.add_vline(
         x=conversion_noviembre,
         line_dash="dash",
-        annotation_text="Noviembre"
+        annotation_text="Noviembre",
     )
+
 
     fig.add_vline(
         x=conversion_objetivo,
         line_dash="dot",
-        annotation_text="Objetivo"
+        annotation_text="Objetivo",
     )
+
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
-    # ========================================================
-    # MAYO CON TASA DE NOVIEMBRE
-    # ========================================================
-
-    st.divider()
-
-    st.subheader(
-        "🚀 Mayo con el Conversion Rate de Noviembre"
-    )
-
-    compras_nivel_noviembre = int(
-        round(
-            sesiones_mayo
-            * (
-                conversion_noviembre
-                / 100
-            )
-        )
-    )
-
-    compras_extra_noviembre = (
-        compras_nivel_noviembre
-        - compras_mayo
-    )
-
-    brecha = (
-        conversion_noviembre
-        - conversion_mayo
-    )
-
-    col1, col2, col3 = (
-        st.columns(3)
-    )
-
-    col1.metric(
-        "Brecha de conversión",
-        f"{brecha:+.2f} pp"
-    )
-
-    col2.metric(
-        "Revenue=True proyectado",
-        f"{compras_nivel_noviembre:,}"
-    )
-
-    col3.metric(
-        "Compras adicionales",
-        f"{compras_extra_noviembre:+,}"
-    )
-
-    st.write(
-        f"""
-        Si las **{sesiones_mayo:,} sesiones de mayo**
-        hubieran tenido la tasa de conversión observada
-        en noviembre (**{conversion_noviembre:.2f}%**),
-        el escenario correspondería aproximadamente a:
-
-        **{compras_nivel_noviembre:,} compras**
-
-        o
-
-        **{compras_extra_noviembre:+,} compras adicionales**
-        respecto a mayo.
-        """
-    )
-
-    # ========================================================
-    # IMPACTO MONETARIO OPCIONAL
-    # ========================================================
-
-    st.divider()
-
-    st.subheader(
-        "💰 Impacto monetario estimado"
-    )
-
-    st.write(
-        """
-        El dataset no contiene el valor monetario
-        de las compras.
-
-        Si conocemos el ticket promedio,
-        podemos estimar el impacto económico.
-        """
-    )
-
-    ticket_promedio = (
-        st.number_input(
-            "Ticket promedio por compra ($)",
-            min_value=0.0,
-            value=0.0,
-            step=100.0
-        )
-    )
-
-    if ticket_promedio > 0:
-
-        ingreso_actual = (
-            compras_mayo
-            * ticket_promedio
-        )
-
-        ingreso_proyectado = (
-            compras_proyectadas
-            * ticket_promedio
-        )
-
-        ingreso_extra = (
-            compras_adicionales
-            * ticket_promedio
-        )
-
-        col1, col2, col3 = (
-            st.columns(3)
-        )
-
-        col1.metric(
-            "Ingreso actual estimado",
-            f"${ingreso_actual:,.2f}"
-        )
-
-        col2.metric(
-            "Ingreso proyectado",
-            f"${ingreso_proyectado:,.2f}"
-        )
-
-        col3.metric(
-            "Ingreso adicional",
-            f"${ingreso_extra:,.2f}"
-        )
-
-    else:
-
-        st.caption(
-            """
-            Introduce un ticket promedio
-            para calcular el impacto económico.
-            """
-        )
 
     st.warning(
         """
-        Esta sección representa una simulación
-        matemática de escenario.
+        La proyección mantiene constante el número de sesiones de
+        mayo y cambia únicamente la tasa de conversión.
 
-        No demuestra que aumentar una variable
-        específica vaya a causar automáticamente
-        este incremento.
-
-        La comparación Mayo vs Noviembre y
-        Random Forest ayudan a investigar qué
-        características están asociadas con
-        mayores tasas de compra.
+        No demuestra que replicar una característica de noviembre
+        cause por sí sola el resultado proyectado.
         """
     )
-
-
-# ============================================================
-# NUEVOS VS RECURRENTES
+    # ============================================================
+# NEW VS RETURNING
 # ============================================================
 
-elif pagina == "👥 Nuevos vs recurrentes":
+elif pagina == "👥 New vs Returning":
 
     st.title(
-        "👥 Nuevos vs recurrentes"
+        "👥 New Visitor vs Returning Visitor"
     )
 
     st.write(
         """
-        Analizamos las diferencias observadas
-        entre visitantes nuevos y recurrentes.
+        Esta sección compara las sesiones etiquetadas como
+        New_Visitor y Returning_Visitor.
+
+        Igual que en el Colab, dejamos fuera la categoría Other
+        para concentrarnos en los dos grupos principales.
         """
     )
 
+    df_visitantes = df[
+        df[
+            "VisitorType"
+        ] != "Other"
+    ].copy()
+
     resumen_visitantes = (
-        df
+        df_visitantes
         .groupby(
             "VisitorType",
-            observed=True
+            observed=True,
         )
         .agg(
             Sesiones=(
                 "Revenue",
-                "size"
+                "size",
             ),
 
             Compras=(
                 "Revenue",
-                "sum"
+                "sum",
             ),
 
             Conversion=(
                 "Revenue",
-                "mean"
+                "mean",
             ),
 
-            ProductRelated=(
-                "ProductRelated",
-                "mean"
-            ),
-
-            ProductRelated_Duration=(
+            ProductDuration=(
                 "ProductRelated_Duration",
-                "mean"
+                "mean",
             ),
 
-            BounceRates=(
+            BounceRate=(
                 "BounceRates",
-                "mean"
+                "mean",
             ),
 
-            ExitRates=(
+            ExitRate=(
                 "ExitRates",
-                "mean"
-            )
+                "mean",
+            ),
         )
         .reset_index()
     )
@@ -2721,26 +2265,22 @@ elif pagina == "👥 Nuevos vs recurrentes":
         "Conversion"
     ] *= 100
 
-    total_sesiones = (
-        resumen_visitantes[
-            "Sesiones"
-        ].sum()
-    )
-
     resumen_visitantes[
-        "% de sesiones"
+        "% sesiones"
     ] = (
         resumen_visitantes[
             "Sesiones"
         ]
-        / total_sesiones
+        / resumen_visitantes[
+            "Sesiones"
+        ].sum()
         * 100
     )
 
     st.dataframe(
-        resumen_visitantes,
+        resumen_visitantes.round(3),
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
 
     col1, col2 = (
@@ -2755,13 +2295,13 @@ elif pagina == "👥 Nuevos vs recurrentes":
             y="Sesiones",
             text_auto=True,
             title=(
-                "Sesiones por tipo de visitante"
-            )
+                "Volumen de sesiones por tipo de visitante"
+            ),
         )
 
         st.plotly_chart(
             fig,
-            use_container_width=True
+            use_container_width=True,
         )
 
     with col2:
@@ -2773,102 +2313,31 @@ elif pagina == "👥 Nuevos vs recurrentes":
             text_auto=".1f",
             labels={
                 "Conversion":
-                    "Conversion Rate (%)"
+                    "Conversión (%)",
             },
             title=(
                 "Conversión por tipo de visitante"
-            )
+            ),
         )
 
         st.plotly_chart(
             fig,
-            use_container_width=True
+            use_container_width=True,
         )
-
-    st.subheader(
-        "📆 Comportamiento mensual"
-    )
-
-    visitor_month = (
-        df
-        .groupby(
-            [
-                "Month",
-                "VisitorType"
-            ],
-            observed=True
-        )
-        .agg(
-            Sesiones=(
-                "Revenue",
-                "size"
-            ),
-
-            Conversion=(
-                "Revenue",
-                "mean"
-            )
-        )
-        .reset_index()
-    )
-
-    visitor_month[
-        "Conversion"
-    ] *= 100
-
-    visitor_month[
-        "Month"
-    ] = pd.Categorical(
-        visitor_month[
-            "Month"
-        ],
-        categories=orden_meses,
-        ordered=True
-    )
-
-    visitor_month = (
-        visitor_month
-        .sort_values(
-            "Month"
-        )
-    )
-
-    fig = px.line(
-        visitor_month,
-        x="Month",
-        y="Conversion",
-        color="VisitorType",
-        markers=True,
-        hover_data=[
-            "Sesiones"
-        ],
-        labels={
-            "Conversion":
-                "Conversion Rate (%)"
-        },
-        title=(
-            "Conversión mensual por tipo de visitante"
-        )
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
 
     st.info(
         """
-        El dataset permite comparar sesiones
-        de usuarios nuevos y recurrentes.
+        Esta comparación no debe interpretarse como una tasa real
+        de retención.
 
-        Sin embargo, no permite determinar
-        exactamente por qué una persona
-        específica decidió no regresar,
-        porque no existe seguimiento
-        individual longitudinal.
+        El dataset permite comparar sesiones según VisitorType,
+        pero no seguir al mismo usuario individual a lo largo
+        del tiempo.
         """
     )
-    # ============================================================
+
+
+# ============================================================
 # CONVERSIÓN
 # ============================================================
 
@@ -2896,97 +2365,39 @@ elif pagina == "🛍️ Conversión":
 
     col1.metric(
         "Sesiones",
-        f"{len(df_filtrado):,}"
+        f"{len(df_filtrado):,}",
     )
 
     col2.metric(
         "Compras",
-        f"{compras:,}"
+        f"{compras:,}",
     )
 
     col3.metric(
         "Conversión",
-        f"{conversion:.2f}%"
+        f"{conversion:.2f}%",
     )
 
     # --------------------------------------------------------
-    # VISITOR TYPE
+    # CONVERSIÓN MENSUAL
     # --------------------------------------------------------
-
-    st.subheader(
-        "Conversión por tipo de visitante"
-    )
-
-    visitante = (
-        df_filtrado
-        .groupby(
-            "VisitorType",
-            observed=True
-        )
-        .agg(
-            Sesiones=(
-                "Revenue",
-                "size"
-            ),
-            Conversion=(
-                "Revenue",
-                "mean"
-            )
-        )
-        .reset_index()
-    )
-
-    visitante[
-        "Conversion"
-    ] *= 100
-
-    fig = px.bar(
-        visitante,
-        x="VisitorType",
-        y="Conversion",
-        hover_data=[
-            "Sesiones"
-        ],
-        text_auto=".1f",
-        labels={
-            "VisitorType":
-                "Tipo de visitante",
-            "Conversion":
-                "Conversión (%)"
-        },
-        title=(
-            "Conversión por tipo de visitante"
-        )
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-    # --------------------------------------------------------
-    # MES
-    # --------------------------------------------------------
-
-    st.subheader(
-        "Conversión por mes"
-    )
 
     mensual = (
         df_filtrado
         .groupby(
             "Month",
-            observed=True
+            observed=True,
         )
         .agg(
             Sesiones=(
                 "Revenue",
-                "size"
+                "size",
             ),
+
             Conversion=(
                 "Revenue",
-                "mean"
-            )
+                "mean",
+            ),
         )
         .reset_index()
     )
@@ -3002,7 +2413,7 @@ elif pagina == "🛍️ Conversión":
             "Month"
         ],
         categories=orden_meses,
-        ordered=True
+        ordered=True,
     )
 
     mensual = (
@@ -3021,189 +2432,53 @@ elif pagina == "🛍️ Conversión":
             "Sesiones"
         ],
         labels={
-            "Month":
-                "Mes",
             "Conversion":
-                "Conversión (%)"
+                "Conversión (%)",
         },
         title=(
-            "Conversion Rate mensual"
-        )
+            "Conversión por mes"
+        ),
     )
 
     st.plotly_chart(
         fig,
-        use_container_width=True
-    )
-
-    # --------------------------------------------------------
-    # WEEKEND
-    # --------------------------------------------------------
-
-    st.subheader(
-        "Fin de semana vs entre semana"
-    )
-
-    weekend = (
-        df_filtrado
-        .groupby(
-            "Weekend"
-        )
-        .agg(
-            Sesiones=(
-                "Revenue",
-                "size"
-            ),
-            Conversion=(
-                "Revenue",
-                "mean"
-            )
-        )
-        .reset_index()
-    )
-
-    weekend[
-        "Conversion"
-    ] *= 100
-
-    weekend[
-        "Tipo de día"
-    ] = weekend[
-        "Weekend"
-    ].map(
-        {
-            False:
-                "Entre semana",
-            True:
-                "Fin de semana"
-        }
-    )
-
-    fig = px.bar(
-        weekend,
-        x="Tipo de día",
-        y="Conversion",
-        hover_data=[
-            "Sesiones"
-        ],
-        text_auto=".1f",
-        labels={
-            "Conversion":
-                "Conversión (%)"
-        },
-        title=(
-            "Conversión según tipo de día"
-        )
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
 
 # ============================================================
-# RELACIONES ENTRE VARIABLES
+# CORRELACIONES
 # ============================================================
 
-elif pagina == "🔥 Relaciones entre variables":
+elif pagina == "🔥 Correlaciones":
 
     st.title(
-        "🔥 Relaciones entre variables"
+        "🔥 Matriz de correlación"
     )
 
     st.write(
         """
-        Selecciona dos variables para analizar su relación
-        y observar cómo se distribuyen las sesiones
-        con compra y sin compra.
+        Analizamos las correlaciones entre las variables numéricas
+        antes de realizar la selección de variables para el modelo.
         """
     )
 
-    col1, col2 = (
-        st.columns(2)
-    )
-
-    with col1:
-
-        variable_x = (
-            st.selectbox(
-                "Variable X",
-                variables_numericas,
-                index=4
-            )
-        )
-
-    with col2:
-
-        variable_y = (
-            st.selectbox(
-                "Variable Y",
-                variables_numericas,
-                index=5
-            )
-        )
-
-    correlacion_xy = (
+    correlacion = (
         df_filtrado[
-            [
-                variable_x,
-                variable_y
-            ]
-        ]
-        .corr()
-        .iloc[0, 1]
-    )
-
-    st.metric(
-        "Correlación",
-        f"{correlacion_xy:.3f}"
-    )
-
-    temp = agregar_resultado(
-        df_filtrado
-    )
-
-    fig = px.scatter(
-        temp,
-        x=variable_x,
-        y=variable_y,
-        color="Resultado",
-        opacity=0.55,
-        hover_data=[
-            "Month",
-            "VisitorType"
-        ],
-        title=(
-            f"{variable_x} vs {variable_y}"
-        )
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-    st.subheader(
-        "Matriz de correlaciones"
-    )
-
-    matriz = (
-        df_filtrado[
-            variables_numericas
+            variables_numericas_eda
         ]
         .corr()
     )
 
     fig = px.imshow(
-        matriz,
+        correlacion,
         text_auto=".2f",
         zmin=-1,
         zmax=1,
         aspect="auto",
         title=(
-            "Correlaciones de variables numéricas"
-        )
+            "Correlaciones entre variables numéricas"
+        ),
     )
 
     fig.update_layout(
@@ -3212,7 +2487,7 @@ elif pagina == "🔥 Relaciones entre variables":
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
     col1, col2 = (
@@ -3222,20 +2497,31 @@ elif pagina == "🔥 Relaciones entre variables":
     col1.metric(
         "BounceRates ↔ ExitRates",
         f"""
-        {matriz.loc[
+        {correlacion.loc[
             "BounceRates",
             "ExitRates"
         ]:.2f}
-        """
+        """,
     )
 
     col2.metric(
-        "ProductRelated ↔ Duration",
+        "ProductRelated ↔ ProductRelated_Duration",
         f"""
-        {matriz.loc[
+        {correlacion.loc[
             "ProductRelated",
             "ProductRelated_Duration"
         ]:.2f}
+        """,
+    )
+
+    st.write(
+        """
+        En el Colab se decidió:
+
+        - Mantener **BounceRates** y **ExitRates**.
+        - Eliminar **ProductRelated**.
+        - Eliminar **Administrative**.
+        - Mantener sus variables de duración correspondientes.
         """
     )
 
@@ -3251,7 +2537,7 @@ elif pagina == "⚙️ Preparación del modelo":
     )
 
     st.subheader(
-        "1. Dataset limpio"
+        "1. Limpieza"
     )
 
     st.write(
@@ -3262,32 +2548,53 @@ elif pagina == "⚙️ Preparación del modelo":
         Duplicados eliminados:
         **{duplicados:,}**
 
-        Registros utilizados:
+        Registros limpios:
         **{len(df):,}**
         """
     )
 
     st.subheader(
-        "2. Eliminación de PageValues"
-    )
-
-    st.warning(
-        """
-        PageValues se mantiene durante el análisis
-        exploratorio, pero se elimina de los modelos
-        debido al posible riesgo de target leakage.
-        """
-    )
-
-    st.subheader(
-        "3. Variables categóricas"
+        "2. Variables eliminadas"
     )
 
     st.write(
         """
-        Se aplica One-Hot Encoding mediante
-        `pd.get_dummies()` a:
+        Antes del modelo se eliminan:
+
+        **ProductRelated**
+
+        Se elimina debido a su alta correlación con
+        ProductRelated_Duration.
+
+        **Administrative**
+
+        Se elimina para conservar Administrative_Duration
+        como representación del comportamiento administrativo.
+
+        **PageValues**
+
+        Se elimina posteriormente por posible fuga de objetivo.
         """
+    )
+
+    st.subheader(
+        "3. Variables numéricas del modelo"
+    )
+
+    st.code(
+        """
+Administrative_Duration
+Informational
+Informational_Duration
+ProductRelated_Duration
+BounceRates
+ExitRates
+SpecialDay
+        """
+    )
+
+    st.subheader(
+        "4. Variables categóricas"
     )
 
     st.code(
@@ -3302,6 +2609,13 @@ Weekend
         """
     )
 
+    st.write(
+        """
+        Las variables categóricas son transformadas mediante
+        `pd.get_dummies()`.
+        """
+    )
+
     col1, col2, col3 = (
         st.columns(3)
     )
@@ -3310,32 +2624,28 @@ Weekend
         "Predictores finales",
         ml[
             "X"
-        ].shape[1]
+        ].shape[1],
     )
 
     col2.metric(
         "Train",
-        f"{len(ml['X_train']):,}"
+        f"{len(ml['X_train']):,}",
     )
 
     col3.metric(
         "Test",
-        f"{len(ml['X_test']):,}"
+        f"{len(ml['X_test']):,}",
     )
 
     st.subheader(
-        "4. Train / Test"
+        "5. Train / Test"
     )
 
     st.write(
         """
-        Se utiliza una división:
-
         **80% entrenamiento**
 
         **20% prueba**
-
-        con:
 
         `random_state = 42`
 
@@ -3344,24 +2654,23 @@ Weekend
     )
 
     st.subheader(
-        "5. StandardScaler"
+        "6. StandardScaler"
     )
 
     st.write(
         """
-        Las variables numéricas son estandarizadas
-        utilizando únicamente la información
-        aprendida del conjunto de entrenamiento.
+        El escalador se ajusta únicamente con los datos
+        de entrenamiento y después transforma train y test.
         """
     )
 
     st.subheader(
-        "6. Modelos"
+        "7. Modelos"
     )
 
     st.write(
         """
-        Se comparan cinco modelos de clasificación:
+        Se comparan cinco modelos:
 
         - Regresión Logística
         - Árbol de Decisión
@@ -3373,10 +2682,10 @@ Weekend
 
 
 # ============================================================
-# MODELOS DE MACHINE LEARNING
+# MODELOS
 # ============================================================
 
-elif pagina == "🤖 Modelos de Machine Learning":
+elif pagina == "🤖 Modelos":
 
     st.title(
         "🤖 Modelos de Machine Learning"
@@ -3385,19 +2694,17 @@ elif pagina == "🤖 Modelos de Machine Learning":
     st.write(
         """
         Selecciona un modelo para revisar sus métricas
-        y matriz de confusión.
+        y su matriz de confusión.
         """
     )
 
-    modelo_seleccionado = (
-        st.selectbox(
-            "Selecciona un modelo",
-            ml[
-                "resultados"
-            ][
-                "Modelo"
-            ].tolist()
-        )
+    modelo = st.selectbox(
+        "Selecciona un modelo",
+        ml[
+            "resultados"
+        ][
+            "Modelo"
+        ].tolist(),
     )
 
     fila = (
@@ -3408,7 +2715,7 @@ elif pagina == "🤖 Modelos de Machine Learning":
             "Modelo"
         )
         .loc[
-            modelo_seleccionado
+            modelo
         ]
     )
 
@@ -3418,22 +2725,22 @@ elif pagina == "🤖 Modelos de Machine Learning":
 
     col1.metric(
         "Accuracy",
-        f"{fila['Accuracy']*100:.2f}%"
+        f"{fila['Accuracy']*100:.2f}%",
     )
 
     col2.metric(
         "F1 Macro",
-        f"{fila['F1 Macro']:.2f}"
+        f"{fila['F1 Macro']:.2f}",
     )
 
     col3.metric(
         "Precision Compra",
-        f"{fila['Precision Compra']*100:.2f}%"
+        f"{fila['Precision Compra']*100:.2f}%",
     )
 
     col4.metric(
         "Recall Compra",
-        f"{fila['Recall Compra']*100:.2f}%"
+        f"{fila['Recall Compra']*100:.2f}%",
     )
 
     col1, col2 = (
@@ -3442,25 +2749,25 @@ elif pagina == "🤖 Modelos de Machine Learning":
 
     col1.metric(
         "Precision No compra",
-        f"{fila['Precision No compra']*100:.2f}%"
+        f"{fila['Precision No compra']*100:.2f}%",
     )
 
     col2.metric(
         "Recall No compra",
-        f"{fila['Recall No compra']*100:.2f}%"
+        f"{fila['Recall No compra']*100:.2f}%",
     )
 
-    matriz_modelo = (
+    matriz = (
         ml[
             "matrices"
         ][
-            modelo_seleccionado
+            modelo
         ]
     )
 
     matriz_pct = (
-        matriz_modelo
-        / matriz_modelo.sum()
+        matriz
+        / matriz.sum()
         * 100
     )
 
@@ -3469,57 +2776,80 @@ elif pagina == "🤖 Modelos de Machine Learning":
         text_auto=".1f",
         x=[
             "Predice No compra",
-            "Predice Compra"
+            "Predice Compra",
         ],
         y=[
             "Real No compra",
-            "Real Compra"
+            "Real Compra",
         ],
         labels={
             "x":
                 "Predicción",
+
             "y":
                 "Valor real",
+
             "color":
-                "% del test"
+                "% del test",
         },
         title=(
-            f"Matriz de confusión — "
-            f"{modelo_seleccionado}"
-        )
+            f"Matriz de confusión — {modelo}"
+        ),
     )
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
-    if (
-        modelo_seleccionado
-        == "SVM"
+    with st.expander(
+        "¿Cómo leer la matriz de confusión?"
     ):
 
-        st.warning(
+        st.write(
             """
-            SVM muestra un fuerte sesgo hacia
-            la clase mayoritaria.
+            **Superior izquierda**
 
-            Por ello, una Accuracy alta puede
-            resultar engañosa en un problema
-            con clases desbalanceadas.
+            Verdadero negativo:
+            No compra clasificada correctamente como No compra.
+
+            **Superior derecha**
+
+            Falso positivo:
+            No compra clasificada como Compra.
+
+            **Inferior izquierda**
+
+            Falso negativo:
+            Compra clasificada como No compra.
+
+            **Inferior derecha**
+
+            Verdadero positivo:
+            Compra clasificada correctamente como Compra.
             """
         )
 
-    if (
-        modelo_seleccionado
-        == "Random Forest"
-    ):
+    if modelo == "SVM":
+
+        st.warning(
+            """
+            SVM presenta un fuerte sesgo hacia la clase mayoritaria.
+
+            Identifica muy bien No compra, pero prácticamente
+            no detecta Compra.
+
+            Por eso una Accuracy alta puede resultar engañosa
+            en este problema desbalanceado.
+            """
+        )
+
+    if modelo == "Random Forest":
 
         st.info(
             """
-            Random Forest detecta una proporción
-            mayor de las sesiones que terminan
-            en compra, aunque también genera
+            Random Forest detecta una proporción mucho mayor
+            de compradores reales, aunque a cambio genera
             más falsos positivos.
             """
         )
@@ -3545,16 +2875,15 @@ elif pagina == "📊 Comparación de modelos":
         resultados.copy()
     )
 
-    columnas_metricas = [
+    columnas_pct = [
         "Accuracy",
-        "F1 Macro",
+        "Precision No compra",
+        "Recall No compra",
         "Precision Compra",
         "Recall Compra",
-        "Precision No compra",
-        "Recall No compra"
     ]
 
-    for columna in columnas_metricas:
+    for columna in columnas_pct:
 
         tabla[
             columna
@@ -3565,30 +2894,38 @@ elif pagina == "📊 Comparación de modelos":
             * 100
         ).round(2)
 
+    tabla[
+        "F1 Macro"
+    ] = (
+        tabla[
+            "F1 Macro"
+        ].round(2)
+    )
+
     st.dataframe(
         tabla,
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
     )
 
     st.subheader(
-        "Accuracy y F1 Macro"
+        "Accuracy vs F1 Macro"
     )
 
-    comparacion = (
+    comparacion_general = (
         resultados.melt(
             id_vars="Modelo",
             value_vars=[
                 "Accuracy",
-                "F1 Macro"
+                "F1 Macro",
             ],
             var_name="Métrica",
-            value_name="Valor"
+            value_name="Valor",
         )
     )
 
     fig = px.bar(
-        comparacion,
+        comparacion_general,
         x="Modelo",
         y="Valor",
         color="Métrica",
@@ -3596,16 +2933,16 @@ elif pagina == "📊 Comparación de modelos":
         text_auto=".2f",
         title=(
             "Comparación general de modelos"
-        )
+        ),
     )
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
     st.subheader(
-        "🎯 Detección de compradores"
+        "🎯 Recall para Compra"
     )
 
     fig = px.bar(
@@ -3614,8 +2951,8 @@ elif pagina == "📊 Comparación de modelos":
         y="Recall Compra",
         text_auto=".2f",
         title=(
-            "Recall para la clase Compra"
-        )
+            "Capacidad para detectar compradores reales"
+        ),
     )
 
     fig.update_layout(
@@ -3624,14 +2961,13 @@ elif pagina == "📊 Comparación de modelos":
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
     st.warning(
         """
-        Debido al desbalance de Revenue,
-        Accuracy no debe utilizarse
-        como único criterio de evaluación.
+        Como Revenue está desbalanceado, Accuracy no debe
+        utilizarse como único criterio para elegir el modelo.
         """
     )
 
@@ -3664,49 +3000,46 @@ elif pagina == "🌲 Random Forest":
 
     col1.metric(
         "Accuracy",
-        f"{rf['Accuracy']*100:.2f}%"
+        f"{rf['Accuracy']*100:.2f}%",
     )
 
     col2.metric(
         "F1 Macro",
-        f"{rf['F1 Macro']:.2f}"
+        f"{rf['F1 Macro']:.2f}",
     )
 
     col3.metric(
         "Recall Compra",
-        f"{rf['Recall Compra']*100:.2f}%"
+        f"{rf['Recall Compra']*100:.2f}%",
     )
 
     col4.metric(
         "Precision Compra",
-        f"{rf['Precision Compra']*100:.2f}%"
+        f"{rf['Precision Compra']*100:.2f}%",
     )
 
     st.subheader(
-        "¿Por qué nos interesa este modelo?"
+        "¿Por qué se selecciona?"
     )
 
     st.write(
         f"""
-        Bajo el criterio de priorizar la detección
-        de compradores potenciales, Random Forest
-        identifica aproximadamente:
+        Bajo el criterio de negocio de priorizar la detección
+        de compradores potenciales, Random Forest identifica
+        aproximadamente:
 
         **{rf['Recall Compra']*100:.1f}% de las compras reales**
-
-        presentes en el conjunto de prueba.
         """
     )
 
     st.write(
         f"""
-        Sin embargo, su Precision para Compra es
-        aproximadamente:
+        Su Precision para Compra es aproximadamente:
 
         **{rf['Precision Compra']*100:.1f}%**
 
-        Esto indica que también genera una cantidad
-        relevante de falsos positivos.
+        Esto significa que también genera una cantidad
+        importante de falsos positivos.
         """
     )
 
@@ -3729,38 +3062,44 @@ elif pagina == "🌲 Random Forest":
         text_auto=".1f",
         x=[
             "Predice No compra",
-            "Predice Compra"
+            "Predice Compra",
         ],
         y=[
             "Real No compra",
-            "Real Compra"
+            "Real Compra",
         ],
         labels={
             "x":
                 "Predicción",
+
             "y":
                 "Valor real",
+
             "color":
-                "% del test"
+                "% del test",
         },
         title=(
             "Matriz de confusión — Random Forest"
-        )
+        ),
     )
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
     st.info(
         """
-        Debido a su Precision, este tipo de modelo
-        podría ser más útil para intervenciones
-        de bajo costo, como recomendaciones,
-        personalización de contenido o mensajes,
-        que para descuentos costosos aplicados
-        automáticamente.
+        Este comportamiento puede ser útil para intervenciones
+        de bajo costo como:
+
+        - banners;
+        - recomendaciones;
+        - recordatorios;
+        - personalización de contenido.
+
+        Para incentivos costosos habría que considerar
+        cuidadosamente la baja Precision.
         """
     )
 
@@ -3777,8 +3116,8 @@ elif pagina == "📈 Variables importantes":
 
     st.write(
         """
-        Estas son las variables que tienen mayor peso
-        dentro de las decisiones del Random Forest.
+        El ranking se calcula directamente a partir
+        del Random Forest entrenado en este Streamlit.
         """
     )
 
@@ -3799,25 +3138,21 @@ elif pagina == "📈 Variables importantes":
         orientation="h",
         title=(
             "Top 12 variables — Random Forest"
-        )
+        ),
     )
 
     st.plotly_chart(
         fig,
-        use_container_width=True
+        use_container_width=True,
     )
 
     st.subheader(
-        "Top 5 variables"
-    )
-
-    top5 = (
-        importancia.head(5)
+        "Top 5 actual"
     )
 
     for posicion, fila in enumerate(
-        top5.itertuples(),
-        start=1
+        importancia.head(5).itertuples(),
+        start=1,
     ):
 
         st.write(
@@ -3829,24 +3164,23 @@ elif pagina == "📈 Variables importantes":
 
     st.warning(
         """
-        Feature importance indica qué variables
-        fueron relevantes para las decisiones
-        del modelo.
+        ProductRelated y Administrative no aparecen como
+        variables del modelo porque fueron eliminadas antes
+        del entrenamiento, tal como se hace en el Colab.
 
-        No significa que esas variables causen
-        directamente una compra.
+        Sí pueden seguir analizándose dentro del EDA anterior.
         """
     )
 
 
 # ============================================================
-# PROPUESTA DE NEGOCIO Y CONCLUSIONES
+# PROPUESTA DE NEGOCIO
 # ============================================================
 
-elif pagina == "💼 Propuesta de negocio y conclusiones":
+elif pagina == "💼 Propuesta de negocio":
 
     st.title(
-        "💼 Propuesta de negocio y conclusiones"
+        "💼 Propuesta de negocio"
     )
 
     rf = (
@@ -3861,108 +3195,90 @@ elif pagina == "💼 Propuesta de negocio y conclusiones":
         ]
     )
 
-    df_mayo_final = df[
+    mayo = df[
         df[
             "Month"
         ] == "May"
     ]
 
-    df_noviembre_final = df[
+    noviembre = df[
         df[
             "Month"
         ] == "Nov"
     ]
 
-    conversion_mayo_final = (
+    conv_mayo = (
         tasa_conversion(
-            df_mayo_final
+            mayo
         )
     )
 
-    conversion_noviembre_final = (
+    conv_nov = (
         tasa_conversion(
-            df_noviembre_final
+            noviembre
         )
     )
 
     st.subheader(
-        "🎯 Propuesta de negocio"
+        "1. Problema"
     )
 
     st.write(
         """
-        La propuesta consiste en analizar qué características
-        hacen diferente a noviembre y utilizar esos hallazgos
-        como referencia para diseñar acciones que permitan
-        mejorar la conversión durante mayo.
+        El volumen de sesiones no está directamente relacionado
+        con una mayor conversión.
+
+        Por ello, nos interesa estudiar por qué un mes como
+        noviembre presenta un comportamiento diferente a mayo.
         """
+    )
+
+    col1, col2 = (
+        st.columns(2)
+    )
+
+    col1.metric(
+        "Conversión Mayo",
+        f"{conv_mayo:.2f}%",
+    )
+
+    col2.metric(
+        "Conversión Noviembre",
+        f"{conv_nov:.2f}%",
     )
 
     st.subheader(
-        "1. Entender qué hace diferente a Noviembre"
+        "2. Qué hace diferente a Noviembre"
     )
 
     st.write(
-        f"""
-        La tasa de conversión observada es:
+        """
+        La propuesta es estudiar especialmente:
 
-        **Mayo:** {conversion_mayo_final:.2f}%
-
-        **Noviembre:** {conversion_noviembre_final:.2f}%
-
-        El dashboard permite comparar variables como:
-
-        - ProductRelated
-        - ProductRelated_Duration
-        - BounceRates
         - ExitRates
-        - Administrative
-        - Informational
+        - BounceRates
+        - ProductRelated_Duration
+        - Administrative_Duration
+        - Month
+        - VisitorType
 
-        para investigar qué diferencias de comportamiento
-        existen entre ambos meses.
+        para identificar patrones asociados con la mayor
+        conversión observada.
         """
     )
 
     st.subheader(
-        "2. Llevar los hallazgos a Mayo"
+        "3. Month + VisitorType"
     )
 
     st.write(
         """
-        El simulador de Mayo permite establecer un
-        Conversion Rate objetivo y traducirlo en un
-        número aproximado de compras adicionales,
-        manteniendo constante el volumen de sesiones.
-        """
-    )
+        Month y VisitorType pueden utilizarse como una
+        segmentación descriptiva inicial.
 
-    st.info(
-        """
-        Esto ayuda a responder una pregunta de negocio:
-
-        **¿Qué impacto tendría cerrar parte de la brecha
-        de conversión entre Mayo y Noviembre?**
-        """
-    )
-
-    st.subheader(
-        "3. Nuevos vs recurrentes"
-    )
-
-    st.write(
-        """
-        VisitorType permite estudiar diferencias en:
-
-        - cantidad de sesiones;
-        - tasa de conversión;
-        - páginas de producto visitadas;
-        - duración de navegación;
-        - Bounce Rate;
-        - Exit Rate.
-
-        Esto permite identificar oportunidades diferentes
-        para adquisición y retención.
+        Esto permite entender quién llega y en qué contexto
+        temporal antes de analizar su comportamiento dentro
+        de la página.
         """
     )
 
@@ -3972,18 +3288,11 @@ elif pagina == "💼 Propuesta de negocio y conclusiones":
 
     st.write(
         f"""
-        Una vez que el usuario comienza a navegar,
-        Random Forest utiliza las señales generadas
-        durante la sesión.
+        Random Forest permite detectar aproximadamente:
 
-        Su Recall para Compra es aproximadamente:
+        **{rf['Recall Compra']*100:.1f}% de las sesiones que
+        realmente terminan en compra.**
 
-        **{rf['Recall Compra']*100:.1f}%**
-        """
-    )
-
-    st.write(
-        f"""
         Su Precision para Compra es aproximadamente:
 
         **{rf['Precision Compra']*100:.1f}%**
@@ -3991,30 +3300,46 @@ elif pagina == "💼 Propuesta de negocio y conclusiones":
     )
 
     st.subheader(
-        "5. Estrategia propuesta"
+        "5. Aplicar los hallazgos a Mayo"
+    )
+
+    st.write(
+        """
+        El objetivo no es afirmar que noviembre pueda copiarse
+        directamente.
+
+        La idea es identificar qué características de navegación
+        son diferentes y utilizarlas para diseñar hipótesis de
+        mejora durante mayo.
+        """
+    )
+
+    st.info(
+        """
+        En la sección **Mayo vs Noviembre**, el slider permite
+        cuantificar cuántas sesiones con Revenue=True
+        corresponderían a distintos objetivos de conversión
+        manteniendo constante el volumen de mayo.
+        """
+    )
+
+    st.subheader(
+        "6. Acciones posibles"
     )
 
     st.success(
         """
-        **Antes o al inicio de la sesión**
+        Algunas acciones de bajo costo que podrían probarse son:
 
-        Utilizar variables como Month y VisitorType
-        para conocer el contexto y segmento del visitante.
+        - recomendaciones de producto;
+        - contenido más relevante;
+        - mejoras de UX;
+        - recordatorios;
+        - personalización;
+        - mensajes antes del abandono.
 
-        **Durante la navegación**
-
-        Utilizar señales como ProductRelated,
-        ProductRelated_Duration, BounceRates y ExitRates
-        junto con Random Forest para detectar sesiones
-        asociadas con mayor intención de compra.
-
-        **Acción de negocio**
-
-        Aplicar intervenciones de bajo costo como
-        recomendaciones, mensajes personalizados,
-        recordatorios o contenido relevante,
-        especialmente durante periodos donde existe
-        oportunidad de mejorar la conversión.
+        El impacto real de estas acciones tendría que evaluarse
+        mediante experimentos controlados.
         """
     )
 
@@ -4029,18 +3354,14 @@ elif pagina == "💼 Propuesta de negocio y conclusiones":
         - El slider de Mayo es una simulación matemática,
           no una predicción causal.
 
-        - Revenue indica si existió compra o no;
-          no representa directamente dinero.
+        - Revenue indica compra/no compra, no ingreso monetario.
 
-        - El impacto monetario solo puede estimarse
-          si se introduce un ticket promedio.
+        - VisitorType no permite medir retención individual.
 
-        - VisitorType permite comparar grupos,
-          pero no conocer exactamente por qué
-          una persona individual no regresó.
+        - Random Forest presenta falsos positivos.
 
-        - Feature importance no demuestra que
-          una variable cause una compra.
+        - ProductRelated y Administrative fueron eliminadas
+          antes del modelado, aunque siguen disponibles en el EDA.
         """
     )
 
@@ -4050,26 +3371,14 @@ elif pagina == "💼 Propuesta de negocio y conclusiones":
 
     st.success(
         """
-        El análisis muestra que el comportamiento de
-        navegación contiene información útil para
-        diferenciar sesiones que terminan en compra.
+        El análisis muestra que existen patrones dentro del
+        comportamiento de navegación asociados con Revenue.
 
-        Al combinar:
-
-        **Mayo vs Noviembre**
-
-        **Nuevos vs recurrentes**
-
-        **Exploración interactiva**
-
-        **Simulación del Conversion Rate**
-
-        **Random Forest**
-
-        el dashboard transforma el análisis del Colab
-        en una herramienta interactiva que puede apoyar
-        decisiones de negocio orientadas a mejorar
-        la conversión.
+        Al combinar el EDA, la comparación Mayo vs Noviembre,
+        VisitorType, el simulador de conversión y Random Forest,
+        el dashboard convierte los resultados del análisis
+        en una herramienta interactiva para apoyar decisiones
+        de negocio.
         """
     )
 
@@ -4082,9 +3391,9 @@ st.divider()
 
 st.caption(
     """
-    Proyecto Final · Online Shoppers Purchasing Intention ·
+    Proyecto Final ·
+    Online Shoppers Purchasing Intention ·
     Streamlit · Plotly · Scikit-learn
     """
 )
-    
     
